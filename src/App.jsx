@@ -347,7 +347,11 @@ function EmptyState({ text, compact }) {
 }
 
 // ---------- Main App ----------
-export default function MealTracker() {
+export default function MealTracker() { 
+  const [darkMode, setDarkMode] = useState(localStorage.getItem("theme") === "dark");
+  useEffect(() => {
+    localStorage.setItem("theme", 
+  darkMode ? "dark" : "light");}, [darkMode]);
   const [tab, setTab] = useState("home");
   const [ready, setReady] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
@@ -667,7 +671,8 @@ export default function MealTracker() {
 
         {tab === "profile" && <ProfilePanel goals={goals} onSaveGoals={persistGoals} weights={weights}
           onAddWeight={async (w) => { const entry = { id: uid(), date: todayStr(), timestamp: Date.now(), weight: w }; await persistWeights([entry, ...weights.filter((x) => x.date !== todayStr())]); }}
-          onDeleteWeight={async (id) => persistWeights(weights.filter((w) => w.id !== id))} />}
+          onDeleteWeight={async (id) => persistWeights(weights.filter((w) => w.id !== id))}
+          darkMode={darkMode} setDarkMode={setDarkMode} />}
       </div>
 
       <div className="absolute left-4 right-4 bottom-4 flex items-center" style={{ background: C.card, borderRadius: 30, boxShadow: "0 6px 20px rgba(20,20,20,0.14)", height: 64 }}>
@@ -918,6 +923,29 @@ function ExerciseForm({ exerciseLogs, onSave }) {
 
   return (
     <div>
+      <div className="flex items-center justify-between p-3 mb-3"
+        style={{ background: C.card, borderRadius: 16 }}>
+        <span className="ft-body" style={{ color: C.ink }}>
+          🌙 Dark Mode
+        </span>
+
+        <button
+          onClick={() => setDarkMode(!darkMode)}
+          style={{
+            padding: "6px 14px",
+            borderRadius: 20,
+            background: darkMode ? C.green : C.line,
+            color: darkMode ? "#fff" : C.ink,
+            border: "none"
+          }}
+        >
+          {darkMode ? "ON" : "OFF"}
+        </button>
+      </div>
+
+    <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>
+      Daily goals
+    </div>
       <div className="flex gap-2 mb-3 mt-1">
         <button onClick={() => setExType("strength")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
           style={{ background: exType === "strength" ? C.ink : C.card, color: exType === "strength" ? "#fff" : C.ink, fontSize: 13, fontWeight: 600 }}><Dumbbell size={15} /> Strength</button>
@@ -1007,7 +1035,7 @@ function ExerciseForm({ exerciseLogs, onSave }) {
   );
 }
 
-function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight }) {
+function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight, darkMode, setDarkMode  }) {
   const [local, setLocal] = useState(goals);
   const [saved, setSaved] = useState(false);
   const [weightInput, setWeightInput] = useState("");
