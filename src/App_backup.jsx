@@ -30,9 +30,7 @@ const LIGHT = {
   pinkTint: "#FCE7EE",
   blue: "#5B8DBF",
   blueTint: "#E6EEF6",
-  greenTint: "#E4F1EA",
   line: "#EAE8E3",
-  onInk: "#FFFFFF", // text/icon color safe to place on top of a C.ink-colored background
 };
 
 const DARK = {
@@ -54,9 +52,7 @@ const DARK = {
   pinkTint: "#3A2330",
   blue: "#6FA8FF",
   blueTint: "#23344D",
-  greenTint: "#1E3A2A",
   line: "#3A3D44",
-  onInk: "#15171B", // in dark mode C.ink is white, so text on it must be dark to stay legible
 };
 
 let C = LIGHT;
@@ -246,8 +242,8 @@ function Ring({ size, stroke, pct, trackColor, fillColor, children }) {
 function Avatar({ initial, size = 46 }) {
   return (
     <div style={{ position: "relative", width: size, height: size }}>
-      <div style={{ width: size, height: size, borderRadius: "50%", background: C.ink, border: `2.5px solid ${C.bgTop}`, boxShadow: "0 0 0 1.5px " + C.ink, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <span className="ft-display" style={{ color: C.onInk, fontSize: size * 0.42, fontWeight: 700 }}>{initial}</span>
+      <div style={{ width: size, height: size, borderRadius: "50%", background: C.ink, border: "2.5px solid #fff", boxShadow: "0 0 0 1.5px " + C.ink, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <span className="ft-display" style={{ color: "#fff", fontSize: size * 0.42, fontWeight: 700 }}>{initial}</span>
       </div>
       {["#F4C94F", "#E85B4B", "#4FA36C"].map((clr, i) => (
         <div key={i} style={{ position: "absolute", right: -2, top: size * 0.18 + i * (size * 0.24), width: 6, height: 6, borderRadius: "50%", background: clr }} />
@@ -268,7 +264,7 @@ function GuidanceIcon({ text }) {
 function TrendBadge({ trend }) {
   if (!trend) return null;
   const map = {
-    improving: { color: C.green, bg: C.greenTint, icon: TrendingUp, label: "Improving" },
+    improving: { color: C.green, bg: "#E4F1EA", icon: TrendingUp, label: "Improving" },
     maintaining: { color: C.tan, bg: C.tanTint, icon: Minus, label: "Maintaining" },
     declining: { color: C.pink, bg: C.pinkTint, icon: TrendingDown, label: "Declining" },
     new: { color: C.blue, bg: C.blueTint, icon: Sparkles, label: "New" },
@@ -286,7 +282,7 @@ function PortionBadge({ verdict, percent }) {
   if (!verdict) return null;
   const map = {
     decrease: { color: C.pink, bg: C.pinkTint, icon: TrendingDown, label: "Shrink portion" },
-    increase: { color: C.green, bg: C.greenTint, icon: TrendingUp, label: "Grow portion" },
+    increase: { color: C.green, bg: "#E4F1EA", icon: TrendingUp, label: "Grow portion" },
     keep: { color: C.tan, bg: C.tanTint, icon: Minus, label: "Keep as-is" },
   };
   const m = map[verdict] || map.keep;
@@ -361,7 +357,7 @@ function NavBtn({ active, onClick, icon: Icon, label }) {
 function Chip({ active, onClick, label }) {
   return (
     <button onClick={onClick} className="px-3.5 py-1.5 rounded-full ft-body"
-      style={{ background: active ? C.ink : C.card, color: active ? C.onInk : C.inkSoft, fontSize: 12.5, fontWeight: 600 }}>
+      style={{ background: active ? C.ink : C.card, color: active ? "#fff" : C.inkSoft, fontSize: 12.5, fontWeight: 600 }}>
       {label}
     </button>
   );
@@ -381,10 +377,8 @@ export default function MealTracker() {
 
   C = darkMode ? DARK : LIGHT;
   useEffect(() => {
-    localStorage.setItem("theme", darkMode ? "dark" : "light");
-    document.documentElement.style.colorScheme = darkMode ? "dark" : "light";
-    document.body.style.background = darkMode ? DARK.bgBottom : LIGHT.bgBottom;
-  }, [darkMode]);
+    localStorage.setItem("theme", 
+  darkMode ? "dark" : "light");}, [darkMode]);
   const [tab, setTab] = useState("home");
   const [ready, setReady] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
@@ -500,7 +494,7 @@ export default function MealTracker() {
                     <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{Math.round(todayTotals.calories)}</div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>/ {goals.calories} kcal goal</div></div>
                   </div>
                   <div className="flex items-center gap-2.5">
-                    <div style={{ width: 34, height: 34, borderRadius: 10, background: C.greenTint, display: "flex", alignItems: "center", justifyContent: "center" }}><ClipboardList size={16} color={C.green} /></div>
+                    <div style={{ width: 34, height: 34, borderRadius: 10, background: "#E4F1EA", display: "flex", alignItems: "center", justifyContent: "center" }}><ClipboardList size={16} color={C.green} /></div>
                     <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{todayLogs.length}</div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>meals logged</div></div>
                   </div>
                   <div className="flex items-center gap-2.5">
@@ -547,7 +541,7 @@ export default function MealTracker() {
                   </div>
                 </div>
               </div>
-              <button onClick={() => openAdd("exercise")} className="w-full flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 13.5, fontWeight: 600 }}>
+              <button onClick={() => openAdd("exercise")} className="w-full flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.ink, color: "#fff", fontSize: 13.5, fontWeight: 600 }}>
                 <Plus size={16} /> Log exercise
               </button>
             </div>
@@ -860,9 +854,9 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave }) {
         <>
           <div className="flex gap-2 mb-3 mt-1">
             <button onClick={() => { setMode("photo"); setError(null); }} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
-              style={{ background: mode === "photo" ? C.ink : C.card, color: mode === "photo" ? C.onInk : C.ink, fontSize: 13, fontWeight: 600 }}><Camera size={15} /> Photo</button>
+              style={{ background: mode === "photo" ? C.ink : C.card, color: mode === "photo" ? "#fff" : C.ink, fontSize: 13, fontWeight: 600 }}><Camera size={15} /> Photo</button>
             <button onClick={() => { setMode("text"); setError(null); }} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
-              style={{ background: mode === "text" ? C.ink : C.card, color: mode === "text" ? C.onInk : C.ink, fontSize: 13, fontWeight: 600 }}><Type size={15} /> Describe</button>
+              style={{ background: mode === "text" ? C.ink : C.card, color: mode === "text" ? "#fff" : C.ink, fontSize: 13, fontWeight: 600 }}><Type size={15} /> Describe</button>
           </div>
           {mode === "photo" ? (
             <div className="mb-3">
@@ -880,10 +874,10 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave }) {
             </div>
           ) : (
             <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. grilled chicken breast, half cup rice, side of steamed broccoli"
-              className="w-full p-3 rounded-2xl ft-body mb-3" style={{ border: "none", background: C.card, color: C.ink, fontSize: 14, minHeight: 90, resize: "none", outline: "none" }} />
+              className="w-full p-3 rounded-2xl ft-body mb-3" style={{ border: "none", background: C.card, fontSize: 14, minHeight: 90, resize: "none", outline: "none" }} />
           )}
           {error && (<div className="flex items-start gap-2 p-2.5 mb-3 rounded-xl" style={{ background: C.pinkTint }}><AlertCircle size={15} color={C.pink} style={{ flexShrink: 0, marginTop: 1 }} /><span className="ft-body" style={{ fontSize: 12, color: C.pink }}>{error}</span></div>)}
-          <button onClick={analyze} disabled={analyzing} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 14, fontWeight: 600, opacity: analyzing ? 0.7 : 1 }}>
+          <button onClick={analyze} disabled={analyzing} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.ink, color: "#fff", fontSize: 14, fontWeight: 600, opacity: analyzing ? 0.7 : 1 }}>
             {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Utensils size={16} />}{analyzing ? "Analyzing meal…" : "Analyze meal"}
           </button>
           <button onClick={() => setPending({ ...EMPTY_MEAL })}
@@ -979,9 +973,9 @@ function ExerciseForm({ exerciseLogs, onSave }) {
     <div>
       <div className="flex gap-2 mb-3 mt-1">
         <button onClick={() => setExType("strength")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
-          style={{ background: exType === "strength" ? C.ink : C.card, color: exType === "strength" ? C.onInk : C.ink, fontSize: 13, fontWeight: 600 }}><Dumbbell size={15} /> Strength</button>
+          style={{ background: exType === "strength" ? C.ink : C.card, color: exType === "strength" ? "#fff" : C.ink, fontSize: 13, fontWeight: 600 }}><Dumbbell size={15} /> Strength</button>
         <button onClick={() => setExType("cardio")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
-          style={{ background: exType === "cardio" ? C.ink : C.card, color: exType === "cardio" ? C.onInk : C.ink, fontSize: 13, fontWeight: 600 }}><Activity size={15} /> Cardio</button>
+          style={{ background: exType === "cardio" ? C.ink : C.card, color: exType === "cardio" ? "#fff" : C.ink, fontSize: 13, fontWeight: 600 }}><Activity size={15} /> Cardio</button>
       </div>
 
       <input
@@ -1010,10 +1004,10 @@ function ExerciseForm({ exerciseLogs, onSave }) {
               <div key={i} className="flex items-center gap-2 p-2.5" style={{ background: C.card, borderRadius: 16 }}>
                 <span className="ft-mono" style={{ fontSize: 11, color: C.inkSoft, width: 16 }}>{i + 1}</span>
                 <input type="number" inputMode="decimal" value={s.weight} onChange={(e) => updateSet(i, "weight", e.target.value)} placeholder="Weight"
-                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 10, padding: "8px 6px", border: "none", outline: "none", fontSize: 13 }} />
+                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, borderRadius: 10, padding: "8px 6px", border: "none", outline: "none", fontSize: 13 }} />
                 <span className="ft-body" style={{ color: C.inkSoft, fontSize: 12 }}>×</span>
                 <input type="number" inputMode="numeric" value={s.reps} onChange={(e) => updateSet(i, "reps", e.target.value)} placeholder="Reps"
-                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 10, padding: "8px 6px", border: "none", outline: "none", fontSize: 13 }} />
+                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, borderRadius: 10, padding: "8px 6px", border: "none", outline: "none", fontSize: 13 }} />
                 {sets.length > 1 && <button onClick={() => removeSet(i)}><X size={14} color={C.inkSoft} /></button>}
               </div>
             ))}
@@ -1024,9 +1018,9 @@ function ExerciseForm({ exerciseLogs, onSave }) {
         <div className="mb-3">
           <div className="flex gap-2 mb-2">
             <input type="number" inputMode="decimal" value={durationMin} onChange={(e) => setDurationMin(e.target.value)} placeholder="Duration (min)"
-              className="flex-1 p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 13, outline: "none" }} />
+              className="flex-1 p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, fontSize: 13, outline: "none" }} />
             <input type="number" inputMode="decimal" value={distanceKm} onChange={(e) => setDistanceKm(e.target.value)} placeholder="Distance (km)"
-              className="flex-1 p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 13, outline: "none" }} />
+              className="flex-1 p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, fontSize: 13, outline: "none" }} />
           </div>
           <div className="flex gap-2">
             {["light", "moderate", "vigorous"].map((lvl) => (
@@ -1095,7 +1089,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
           <span className="ft-mono" style={{ fontSize: 11, color: C.inkSoft }}>{unit}</span>
         </div>
         <input type="number" value={local[key]} onChange={(e) => { setLocal((p) => ({ ...p, [key]: num(e.target.value) })); setSaved(false); }}
-          className="w-full p-3 rounded-2xl ft-mono" style={{ border: "none", background: C.card, color: C.ink, fontSize: 16, outline: "none" }} />
+          className="w-full p-3 rounded-2xl ft-mono" style={{ border: "none", background: C.card, fontSize: 16, outline: "none" }} />
       </div>
     );
   }
@@ -1115,33 +1109,14 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
 
       <button
         onClick={() => setDarkMode(!darkMode)}
-        aria-pressed={darkMode}
-        className="relative"
+        className="px-4 py-2 rounded-full"
         style={{
-          width: 52,
-          height: 30,
-          borderRadius: 999,
           background: darkMode ? C.green : C.track,
+          color: darkMode ? "#fff" : C.ink,
           border: "none",
-          padding: 0,
-          cursor: "pointer",
-          transition: "background .2s ease",
-          flexShrink: 0,
         }}
       >
-        <span
-          style={{
-            position: "absolute",
-            top: 3,
-            left: darkMode ? 25 : 3,
-            width: 24,
-            height: 24,
-            borderRadius: "50%",
-            background: "#fff",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
-            transition: "left .2s ease",
-          }}
-        />
+        {darkMode ? "ON" : "OFF"}
       </button>
     </div>
 
@@ -1153,7 +1128,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
       <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Weight</div>
       <div className="flex gap-2 mb-4">
         <input type="number" inputMode="decimal" value={weightInput} onChange={(e) => setWeightInput(e.target.value)} placeholder="Today's weight"
-          className="flex-1 p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 14, outline: "none" }} />
+          className="flex-1 p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, fontSize: 14, outline: "none" }} />
         <button onClick={() => { const w = num(weightInput, null); if (w) { onAddWeight(w); setWeightInput(""); } }} className="flex items-center justify-center px-4 rounded-2xl" style={{ background: C.orange }}><Plus size={18} color="#fff" /></button>
       </div>
       {weights.length === 0 ? <EmptyState text="No weight entries yet." /> : (
