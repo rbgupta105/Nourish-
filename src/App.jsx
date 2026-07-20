@@ -978,8 +978,20 @@ function ExerciseForm({ exerciseLogs, onSave }) {
           style={{ background: exType === "cardio" ? C.ink : C.card, color: exType === "cardio" ? "#fff" : C.ink, fontSize: 13, fontWeight: 600 }}><Activity size={15} /> Cardio</button>
       </div>
 
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder={exType === "strength" ? "e.g. Bench press" : "e.g. Running"}
-        className="w-full p-3 rounded-2xl ft-body mb-3" style={{ border: "none", background: C.card, fontSize: 14, outline: "none" }} />
+      <input
+  value={name}
+  onChange={(e) => setName(e.target.value)}
+  placeholder={exType === "strength" ? "e.g. Bench press" : "e.g. Running"}
+  className="w-full p-3 rounded-2xl ft-body mb-3"
+  style={{
+    border: "none",
+    background: C.card,
+    color: C.ink,
+    fontSize: 14,
+    outline: "none",
+    WebkitTextFillColor: C.ink,
+  }}
+/>
 
       {exType === "strength" ? (
         <div className="mb-3">
