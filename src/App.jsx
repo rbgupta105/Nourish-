@@ -66,14 +66,36 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
 async function callGemini(contentBlocks) {
   const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash"
+    model: "gemini-3.5-flash"
   });
 
-  const result = await model.generateContent(contentBlocks);
+  const parts = contentBlocks.map((block) => {
+    if (block.type === "image") {
+      return {
+        inlineData: {
+          mimeType: block.source.media_type,
+          data: block.source.data,
+        },
+      };
+    }
 
-  const response = await result.response;
+    if (block.type === "text") {
+      return {
+        text: block.text,
+      };
+    }
+  });
 
-  return response.text();
+  const result = await model.generateContent({
+    contents: [
+      {
+        role: "user",
+        parts,
+      },
+    ],
+  });
+
+  return result.response.text();
 }
 function parseJSON(raw) {
   let cleaned = raw.trim().replace(/^```json/i, "").replace(/^```/, "").replace(/```$/, "").trim();
