@@ -735,7 +735,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave }) {
       const blocks = mode === "photo"
         ? [{ type: "image", source: { type: "base64", media_type: imagePreview.mediaType, data: imagePreview.b64 } }, { type: "text", text: promptText }]
         : [{ type: "text", text: promptText }];
-      const raw = await callgemini(blocks);
+      const raw = await callGemini(blocks);
       const parsed = parseJSON(raw);
       setPending({
         food_name: parsed.food_name || (mode === "text" ? description : "Logged meal"),
