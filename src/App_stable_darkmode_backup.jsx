@@ -3,8 +3,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   Camera, Type, Utensils, ClipboardList, BarChart3, User, Plus,
   Trash2, Loader2, TrendingUp, TrendingDown, Minus, X, Check,
-  Flame, Trophy, Dumbbell, Wheat, Droplet, AlertCircle, Home, Activity, Sparkles,
-  Star, Pencil, Copy
+  Flame, Trophy, Dumbbell, Wheat, Droplet, AlertCircle, Home, Activity, Sparkles
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis,
@@ -399,20 +398,17 @@ export default function MealTracker() {
   const [logs, setLogs] = useState([]);
   const [weights, setWeights] = useState([]);
   const [exerciseLogs, setExerciseLogs] = useState([]);
-  const [favorites, setFavorites] = useState([]);
-  const [editingEntry, setEditingEntry] = useState(null);
 
   useEffect(() => {
     (async () => {
-      const [p, g, l, w, e, f] = await Promise.all([
+      const [p, g, l, w, e] = await Promise.all([
         loadKey("profile", { name: "" }),
         loadKey("goals", { calories: 2000, protein: 120, carbs: 220, fat: 65 }),
         loadKey("meal-logs", []),
         loadKey("weight-logs", []),
         loadKey("exercise-logs", []),
-        loadKey("favorite-meals", []),
       ]);
-      setProfile(p); setGoals(g); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setReady(true);
+      setProfile(p); setGoals(g); setLogs(l); setWeights(w); setExerciseLogs(e); setReady(true);
     })();
   }, []);
 
@@ -421,18 +417,6 @@ export default function MealTracker() {
     calories: acc.calories + num(l.calories), protein: acc.protein + num(l.protein_g),
     carbs: acc.carbs + num(l.carbs_g), fat: acc.fat + num(l.fat_g),
   }), { calories: 0, protein: 0, carbs: 0, fat: 0 }), [todayLogs]);
-
-  // Most-recently-eaten distinct meals (by name), for one-tap re-log alongside favorites.
-  const recentMeals = useMemo(() => {
-    const seen = new Set(); const out = [];
-    for (const l of logs) {
-      const key = (l.food_name || "").trim().toLowerCase();
-      if (!key || seen.has(key)) continue;
-      seen.add(key); out.push(l);
-      if (out.length >= 10) break;
-    }
-    return out;
-  }, [logs]);
 
   const streak = useMemo(() => {
     const dates = new Set(logs.map((l) => l.date));
@@ -455,35 +439,11 @@ export default function MealTracker() {
   async function persistGoals(next) { setGoals(next); await saveKey("goals", next); }
   async function persistProfile(next) { setProfile(next); await saveKey("profile", next); }
   async function persistExercise(next) { setExerciseLogs(next); await saveKey("exercise-logs", next); }
-  async function persistFavorites(next) { setFavorites(next); await saveKey("favorite-meals", next); }
 
   async function deleteLog(id) { await persistLogs(logs.filter((l) => l.id !== id)); }
   async function deleteExercise(id) { await persistExercise(exerciseLogs.filter((e) => e.id !== id)); }
 
-  async function toggleFavorite(meal) {
-    const key = (meal.food_name || "").trim().toLowerCase();
-    if (!key) return;
-    const exists = favorites.some((f) => (f.food_name || "").trim().toLowerCase() === key);
-    if (exists) {
-      await persistFavorites(favorites.filter((f) => (f.food_name || "").trim().toLowerCase() !== key));
-    } else {
-      const { food_name, estimated_portion, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, micronutrients } = meal;
-      await persistFavorites([{ id: uid(), food_name, estimated_portion, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, micronutrients }, ...favorites]);
-    }
-  }
-
-  function openEdit(type, entry) { setEditingEntry({ type, entry }); setAddLogType(type); setShowAdd(true); }
-
-  async function duplicateLog(l) {
-    const { id, date, timestamp, ...rest } = l;
-    await persistLogs([{ id: uid(), date: todayStr(), timestamp: Date.now(), ...rest }, ...logs]);
-  }
-  async function duplicateExercise(e) {
-    const { id, date, timestamp, ...rest } = e;
-    await persistExercise([{ id: uid(), date: todayStr(), timestamp: Date.now(), ...rest }, ...exerciseLogs]);
-  }
-
-  function openAdd(logType, mode) { setEditingEntry(null); setAddLogType(logType); setAddMode(mode || "photo"); setShowAdd(true); }
+  function openAdd(logType, mode) { setAddLogType(logType); setAddMode(mode || "photo"); setShowAdd(true); }
 
   const last14 = useMemo(() => {
     const days = []; for (let i = 13; i >= 0; i--) days.push(daysAgo(i));
@@ -612,14 +572,7 @@ export default function MealTracker() {
                           <div className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>{fmtDateTime(l.timestamp)} · {Math.round(l.calories)} kcal · P{Math.round(l.protein_g)} C{Math.round(l.carbs_g)} F{Math.round(l.fat_g)}</div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-0.5 flex-shrink-0">
-                        <button onClick={() => toggleFavorite(l)} className="p-2" title="Favorite">
-                          <Star size={14} color={C.tan} fill={favorites.some((f) => (f.food_name || "").trim().toLowerCase() === (l.food_name || "").trim().toLowerCase()) ? C.tan : "none"} />
-                        </button>
-                        <button onClick={() => openEdit("meal", l)} className="p-2" title="Edit"><Pencil size={14} color={C.inkSoft} /></button>
-                        <button onClick={() => duplicateLog(l)} className="p-2" title="Duplicate"><Copy size={14} color={C.inkSoft} /></button>
-                        <button onClick={() => deleteLog(l.id)} className="p-2" title="Delete"><Trash2 size={14} color={C.pink} /></button>
-                      </div>
+                      <button onClick={() => deleteLog(l.id)} className="p-2 flex-shrink-0"><Trash2 size={14} color={C.pink} /></button>
                     </div>
                   ))}
                 </div>
@@ -643,11 +596,7 @@ export default function MealTracker() {
                               </div>
                             </div>
                           </div>
-                          <div className="flex items-center gap-0.5 flex-shrink-0">
-                            <button onClick={() => openEdit("exercise", e)} className="p-2" title="Edit"><Pencil size={14} color={C.inkSoft} /></button>
-                            <button onClick={() => duplicateExercise(e)} className="p-2" title="Duplicate"><Copy size={14} color={C.inkSoft} /></button>
-                            <button onClick={() => deleteExercise(e.id)} className="p-2" title="Delete"><Trash2 size={14} color={C.pink} /></button>
-                          </div>
+                          <button onClick={() => deleteExercise(e.id)} className="p-2 flex-shrink-0"><Trash2 size={14} color={C.pink} /></button>
                         </div>
                         {e.ai && (
                           <div className="mt-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.line}` }}>
@@ -795,21 +744,9 @@ export default function MealTracker() {
       {showAdd && (
         <AddLogSheet
           initialLogType={addLogType} initialMode={addMode} goals={goals} todayTotals={todayTotals} todayLogs={todayLogs} exerciseLogs={exerciseLogs}
-          favorites={favorites} recentMeals={recentMeals} onToggleFavorite={toggleFavorite}
-          editingEntry={editingEntry}
-          onClose={() => { setShowAdd(false); setEditingEntry(null); }}
-          onSaveMeal={async (entry) => {
-            const exists = logs.some((l) => l.id === entry.id);
-            const next = exists ? logs.map((l) => (l.id === entry.id ? entry : l)) : [entry, ...logs];
-            await persistLogs(next);
-            setShowAdd(false); setEditingEntry(null);
-          }}
-          onSaveExercise={async (entry) => {
-            const exists = exerciseLogs.some((x) => x.id === entry.id);
-            const next = exists ? exerciseLogs.map((x) => (x.id === entry.id ? entry : x)) : [entry, ...exerciseLogs];
-            await persistExercise(next);
-            setShowAdd(false); setEditingEntry(null);
-          }}
+          onClose={() => setShowAdd(false)}
+          onSaveMeal={async (entry) => { await persistLogs([entry, ...logs]); setShowAdd(false); }}
+          onSaveExercise={async (entry) => { await persistExercise([entry, ...exerciseLogs]); setShowAdd(false); }}
         />
       )}
     </div>
@@ -817,38 +754,32 @@ export default function MealTracker() {
 }
 
 // ---------- Add Log Sheet (Meal or Exercise) ----------
-function AddLogSheet({ initialLogType, initialMode, goals, todayTotals, todayLogs, exerciseLogs, favorites, recentMeals, onToggleFavorite, editingEntry, onClose, onSaveMeal, onSaveExercise }) {
+function AddLogSheet({ initialLogType, initialMode, goals, todayTotals, todayLogs, exerciseLogs, onClose, onSaveMeal, onSaveExercise }) {
   const [logType, setLogType] = useState(initialLogType);
-  const isEditing = !!editingEntry;
 
   return (
     <div className="absolute inset-0 flex flex-col justify-end" style={{ background: "rgba(21,23,27,0.4)" }} onClick={onClose}>
       <div className="flex flex-col" style={{ background: C.bgBottom, borderRadius: "28px 28px 0 0", maxHeight: "90%", boxShadow: "0 -8px 30px rgba(0,0,0,0.2)" }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 pt-4 pb-2">
-          <span className="ft-display" style={{ fontSize: 18, fontWeight: 700, color: C.ink }}>{isEditing ? (logType === "meal" ? "Edit meal" : "Edit workout") : "Add a log"}</span>
+          <span className="ft-display" style={{ fontSize: 18, fontWeight: 700, color: C.ink }}>Add a log</span>
           <button onClick={onClose} style={{ width: 30, height: 30, borderRadius: "50%", background: C.card, display: "flex", alignItems: "center", justifyContent: "center" }}><X size={15} color={C.ink} /></button>
         </div>
-        {!isEditing && (
-          <div className="px-5 pt-1 pb-2">
-            <div className="flex gap-2">
-              <button onClick={() => setLogType("meal")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
-                style={{ background: logType === "meal" ? C.orange : C.card, color: logType === "meal" ? "#fff" : C.ink, fontSize: 13, fontWeight: 600 }}>
-                <Utensils size={15} /> Meal
-              </button>
-              <button onClick={() => setLogType("exercise")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
-                style={{ background: logType === "exercise" ? C.blue : C.card, color: logType === "exercise" ? "#fff" : C.ink, fontSize: 13, fontWeight: 600 }}>
-                <Dumbbell size={15} /> Exercise
-              </button>
-            </div>
+        <div className="px-5 pt-1 pb-2">
+          <div className="flex gap-2">
+            <button onClick={() => setLogType("meal")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
+              style={{ background: logType === "meal" ? C.orange : C.card, color: logType === "meal" ? "#fff" : C.ink, fontSize: 13, fontWeight: 600 }}>
+              <Utensils size={15} /> Meal
+            </button>
+            <button onClick={() => setLogType("exercise")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
+              style={{ background: logType === "exercise" ? C.blue : C.card, color: logType === "exercise" ? "#fff" : C.ink, fontSize: 13, fontWeight: 600 }}>
+              <Dumbbell size={15} /> Exercise
+            </button>
           </div>
-        )}
+        </div>
         <div className="overflow-y-auto px-5 pb-6">
           {logType === "meal"
-            ? <MealForm initialMode={initialMode} goals={goals} todayTotals={todayTotals} todayLogs={todayLogs} onSave={onSaveMeal}
-                favorites={favorites} recentMeals={recentMeals} onToggleFavorite={onToggleFavorite}
-                editingEntry={isEditing && editingEntry.type === "meal" ? editingEntry.entry : null} />
-            : <ExerciseForm exerciseLogs={exerciseLogs} onSave={onSaveExercise}
-                editingEntry={isEditing && editingEntry.type === "exercise" ? editingEntry.entry : null} />}
+            ? <MealForm initialMode={initialMode} goals={goals} todayTotals={todayTotals} todayLogs={todayLogs} onSave={onSaveMeal} />
+            : <ExerciseForm exerciseLogs={exerciseLogs} onSave={onSaveExercise} />}
         </div>
       </div>
     </div>
@@ -857,17 +788,14 @@ function AddLogSheet({ initialLogType, initialMode, goals, todayTotals, todayLog
 
 const EMPTY_MEAL = { food_name: "", estimated_portion: "", calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, sugar_g: 0, sodium_mg: 0, micronutrients: [], confidence: "manual", portion_verdict: null, portion_change_percent: 0, portion_guidance: "" };
 
-function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorites, recentMeals, onToggleFavorite, editingEntry }) {
+function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave }) {
   const [mode, setMode] = useState(initialMode === "manual" ? "text" : initialMode);
   const [imagePreview, setImagePreview] = useState(null);
   const [description, setDescription] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [advising, setAdvising] = useState(false);
   const [error, setError] = useState(null);
-  const [pending, setPending] = useState(() => {
-    if (editingEntry) return { ...editingEntry };
-    return initialMode === "manual" ? { ...EMPTY_MEAL } : null;
-  });
+  const [pending, setPending] = useState(initialMode === "manual" ? { ...EMPTY_MEAL } : null);
   const [photoInputId] = useState(() => "meal-photo-" + uid());
 
   async function handleImagePick(e) {
@@ -923,57 +851,13 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
 
   async function save() {
     if (!pending || !pending.food_name) { setError("Give the meal a name."); return; }
-    await onSave({
-      id: editingEntry ? editingEntry.id : uid(),
-      date: editingEntry ? editingEntry.date : todayStr(),
-      timestamp: editingEntry ? editingEntry.timestamp : Date.now(),
-      source: editingEntry ? editingEntry.source : mode,
-      ...pending,
-    });
+    await onSave({ id: uid(), date: todayStr(), timestamp: Date.now(), source: mode, ...pending });
   }
-
-  function quickLog(meal) {
-    onSave({
-      id: uid(), date: todayStr(), timestamp: Date.now(), source: "quick",
-      food_name: meal.food_name, estimated_portion: meal.estimated_portion || "",
-      calories: num(meal.calories), protein_g: num(meal.protein_g), carbs_g: num(meal.carbs_g), fat_g: num(meal.fat_g),
-      fiber_g: num(meal.fiber_g), sugar_g: num(meal.sugar_g), sodium_mg: num(meal.sodium_mg),
-      micronutrients: Array.isArray(meal.micronutrients) ? meal.micronutrients : [],
-      confidence: meal.confidence || "manual",
-      portion_verdict: meal.portion_verdict || null, portion_change_percent: num(meal.portion_change_percent),
-      portion_guidance: meal.portion_guidance || "",
-    });
-  }
-
-  const isFav = (name) => (favorites || []).some((f) => (f.food_name || "").trim().toLowerCase() === (name || "").trim().toLowerCase());
-
-  const quickPicks = !editingEntry ? [
-    ...(favorites || []),
-    ...((recentMeals || []).filter((r) => !isFav(r.food_name))),
-  ].slice(0, 10) : [];
 
   return (
     <>
       {!pending && (
         <>
-          {quickPicks.length > 0 && (
-            <div className="mb-4">
-              <div className="ft-body mb-1.5" style={{ fontSize: 11.5, fontWeight: 700, color: C.inkSoft, letterSpacing: 0.5, textTransform: "uppercase" }}>Quick log</div>
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {quickPicks.map((m, i) => (
-                  <div key={m.id || i} className="flex flex-col gap-1.5 p-2.5 flex-shrink-0" style={{ background: C.card, borderRadius: 14, minWidth: 128, border: `1px solid ${C.line}` }}>
-                    <button onClick={() => quickLog(m)} className="text-left">
-                      <div className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 140 }}>{m.food_name}</div>
-                      <div className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>{Math.round(num(m.calories))} kcal</div>
-                    </button>
-                    <button onClick={() => onToggleFavorite && onToggleFavorite(m)} className="self-end">
-                      <Star size={13} color={C.tan} fill={isFav(m.food_name) ? C.tan : "none"} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
           <div className="flex gap-2 mb-3 mt-1">
             <button onClick={() => { setMode("photo"); setError(null); }} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
               style={{ background: mode === "photo" ? C.ink : C.card, color: mode === "photo" ? C.onInk : C.ink, fontSize: 13, fontWeight: 600 }}><Camera size={15} /> Photo</button>
@@ -1008,15 +892,9 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       )}
       {pending && (
         <div>
-          <div className="flex items-start justify-between gap-2 mb-1">
-            <input value={pending.food_name} onChange={(e) => updateField("food_name", e.target.value)} placeholder="Meal name" className="flex-1 ft-display"
-              style={{ fontSize: 18, fontWeight: 700, color: C.ink, background: "transparent", border: "none", outline: "none", borderBottom: `1px solid ${C.line}`, paddingBottom: 4 }} />
-            <button onClick={() => onToggleFavorite && onToggleFavorite(pending)} className="p-1.5" style={{ flexShrink: 0 }} title="Favorite this meal">
-              <Star size={18} color={C.tan} fill={isFav(pending.food_name) ? C.tan : "none"} />
-            </button>
-          </div>
-          <input value={pending.estimated_portion} onChange={(e) => updateField("estimated_portion", e.target.value)} placeholder="Portion (e.g. 1 cup, 200g)"
-            className="w-full ft-body mb-3" style={{ fontSize: 12, color: C.inkSoft, background: "transparent", border: "none", outline: "none" }} />
+          <input value={pending.food_name} onChange={(e) => updateField("food_name", e.target.value)} placeholder="Meal name" className="w-full ft-display mb-1"
+            style={{ fontSize: 18, fontWeight: 700, color: C.ink, background: "transparent", border: "none", outline: "none", borderBottom: `1px solid ${C.line}`, paddingBottom: 4 }} />
+          {pending.estimated_portion && <div className="ft-body mb-3" style={{ fontSize: 12, color: C.inkSoft }}>{pending.estimated_portion}</div>}
           {pending.portion_guidance ? (
             <div className="flex items-start gap-2 p-3 mb-3 rounded-xl" style={{ background: C.orangeTint }}>
               <div style={{ marginTop: 1 }}><GuidanceIcon text={pending.portion_guidance} /></div>
@@ -1036,10 +914,8 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
           <NutritionLabel data={pending} editable onChange={updateField} />
           {error && <div className="ft-body mt-2" style={{ fontSize: 12, color: C.pink }}>{error}</div>}
           <div className="flex gap-2 mt-3">
-            {!editingEntry && (
-              <button onClick={() => setPending(null)} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.card, color: C.ink, fontSize: 14, fontWeight: 600 }}><X size={16} /> Back</button>
-            )}
-            <button onClick={save} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.orange, color: "#fff", fontSize: 14, fontWeight: 600 }}><Check size={16} /> {editingEntry ? "Save changes" : "Save log"}</button>
+            <button onClick={() => setPending(null)} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.card, color: C.ink, fontSize: 14, fontWeight: 600 }}><X size={16} /> Back</button>
+            <button onClick={save} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.orange, color: "#fff", fontSize: 14, fontWeight: 600 }}><Check size={16} /> Save log</button>
           </div>
         </div>
       )}
@@ -1047,20 +923,16 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   );
 }
 
-function ExerciseForm({ exerciseLogs, onSave, editingEntry }) {
-  const [exType, setExType] = useState(editingEntry ? editingEntry.type : "strength");
-  const [name, setName] = useState(editingEntry ? editingEntry.name : "");
-  const [sets, setSets] = useState(
-    editingEntry && editingEntry.type === "strength" && editingEntry.sets && editingEntry.sets.length
-      ? editingEntry.sets.map((s) => ({ weight: s.weight === 0 || s.weight ? String(s.weight) : "", reps: s.reps === 0 || s.reps ? String(s.reps) : "" }))
-      : [{ weight: "", reps: "" }]
-  );
-  const [durationMin, setDurationMin] = useState(editingEntry && editingEntry.type === "cardio" ? String(editingEntry.duration_min ?? "") : "");
-  const [distanceKm, setDistanceKm] = useState(editingEntry && editingEntry.type === "cardio" ? String(editingEntry.distance_km ?? "") : "");
-  const [effort, setEffort] = useState(editingEntry && editingEntry.type === "cardio" ? (editingEntry.effort || "moderate") : "moderate");
+function ExerciseForm({ exerciseLogs, onSave }) {
+  const [exType, setExType] = useState("strength");
+  const [name, setName] = useState("");
+  const [sets, setSets] = useState([{ weight: "", reps: "" }]);
+  const [durationMin, setDurationMin] = useState("");
+  const [distanceKm, setDistanceKm] = useState("");
+  const [effort, setEffort] = useState("moderate");
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState(null);
-  const [ai, setAi] = useState(editingEntry ? editingEntry.ai || null : null);
+  const [ai, setAi] = useState(null);
   const [saved, setSaved] = useState(false);
 
   function updateSet(i, key, value) { setSets((s) => s.map((row, idx) => idx === i ? { ...row, [key]: value } : row)); }
@@ -1099,9 +971,7 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry }) {
 
   async function save() {
     if (!name.trim()) { setError("Name the exercise first."); return; }
-    const entry = editingEntry
-      ? { id: editingEntry.id, date: editingEntry.date, timestamp: editingEntry.timestamp, ...buildEntry(), ai }
-      : { id: uid(), date: todayStr(), timestamp: Date.now(), ...buildEntry(), ai };
+    const entry = { id: uid(), date: todayStr(), timestamp: Date.now(), ...buildEntry(), ai };
     await onSave(entry);
   }
 
@@ -1201,7 +1071,7 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry }) {
 
       <div className="flex gap-2">
         {ai && <button onClick={() => setAi(null)} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.card, color: C.ink, fontSize: 14, fontWeight: 600 }}><X size={16} /> Redo</button>}
-        <button onClick={save} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.blue, color: "#fff", fontSize: 14, fontWeight: 600 }}><Check size={16} /> {editingEntry ? "Save changes" : "Save workout"}</button>
+        <button onClick={save} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.blue, color: "#fff", fontSize: 14, fontWeight: 600 }}><Check size={16} /> Save workout</button>
       </div>
       {!ai && <div className="ft-body text-center mt-2" style={{ fontSize: 11.5, color: C.inkSoft }}>You can save without AI feedback too.</div>}
     </div>
