@@ -86,7 +86,11 @@ async function saveKey(key, value) {
 // ---------- Gemini API ----------
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-
+alert(
+  GEMINI_API_KEY
+    ? `Key loaded: ${GEMINI_API_KEY.substring(0, 8)}...`
+    : "Gemini key is undefined!"
+);
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
 async function callGemini(contentBlocks) {
