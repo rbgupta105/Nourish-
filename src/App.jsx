@@ -11,7 +11,7 @@ import {
 } from "recharts";
 
 // ---------- Design tokens ----------
-const C = {
+const LIGHT = {
   bgTop: "#EEEEEC",
   bgBottom: "#F7F6F3",
   ink: "#15171B",
@@ -32,6 +32,31 @@ const C = {
   blueTint: "#E6EEF6",
   line: "#EAE8E3",
 };
+
+const DARK = {
+  bgTop: "#0F1115",
+  bgBottom: "#1A1D23",
+  ink: "#FFFFFF",
+  inkSoft: "#A8ADB8",
+  card: "#23262D",
+  orange: "#EE6C37",
+  orangeDeep: "#D85A28",
+  orangeTint: "#3A2A22",
+  track: "#3A3D44",
+  green: "#4CAF50",
+  purple: "#9B8CFF",
+  purpleTint: "#2C2545",
+  tan: "#D9A441",
+  tanTint: "#3A3120",
+  pink: "#FF7DA4",
+  pinkTint: "#3A2330",
+  blue: "#6FA8FF",
+  blueTint: "#23344D",
+  line: "#3A3D44",
+};
+
+let C = LIGHT;
+
 
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -349,6 +374,8 @@ function EmptyState({ text, compact }) {
 // ---------- Main App ----------
 export default function MealTracker() { 
   const [darkMode, setDarkMode] = useState(localStorage.getItem("theme") === "dark");
+
+  C = darkMode ? DARK : LIGHT;
   useEffect(() => {
     localStorage.setItem("theme", 
   darkMode ? "dark" : "light");}, [darkMode]);
@@ -672,7 +699,7 @@ export default function MealTracker() {
         {tab === "profile" && <ProfilePanel goals={goals} onSaveGoals={persistGoals} weights={weights}
           onAddWeight={async (w) => { const entry = { id: uid(), date: todayStr(), timestamp: Date.now(), weight: w }; await persistWeights([entry, ...weights.filter((x) => x.date !== todayStr())]); }}
           onDeleteWeight={async (id) => persistWeights(weights.filter((w) => w.id !== id))}
-          darkMode={darkMode} setDarkMode={setDarkMode} />}
+          />}
       </div>
 
       <div className="absolute left-4 right-4 bottom-4 flex items-center" style={{ background: C.card, borderRadius: 30, boxShadow: "0 6px 20px rgba(20,20,20,0.14)", height: 64 }}>
@@ -923,29 +950,6 @@ function ExerciseForm({ exerciseLogs, onSave }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between p-3 mb-3"
-        style={{ background: C.card, borderRadius: 16 }}>
-        <span className="ft-body" style={{ color: C.ink }}>
-          🌙 Dark Mode
-        </span>
-
-        <button
-          onClick={() => setDarkMode(!darkMode)}
-          style={{
-            padding: "6px 14px",
-            borderRadius: 20,
-            background: darkMode ? C.green : C.line,
-            color: darkMode ? "#fff" : C.ink,
-            border: "none"
-          }}
-        >
-          {darkMode ? "ON" : "OFF"}
-        </button>
-      </div>
-
-    <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>
-      Daily goals
-    </div>
       <div className="flex gap-2 mb-3 mt-1">
         <button onClick={() => setExType("strength")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
           style={{ background: exType === "strength" ? C.ink : C.card, color: exType === "strength" ? "#fff" : C.ink, fontSize: 13, fontWeight: 600 }}><Dumbbell size={15} /> Strength</button>
@@ -1035,6 +1039,8 @@ function ExerciseForm({ exerciseLogs, onSave }) {
   );
 }
 
+
+   
 function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight, darkMode, setDarkMode  }) {
   const [local, setLocal] = useState(goals);
   const [saved, setSaved] = useState(false);
@@ -1042,7 +1048,8 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
   useEffect(() => setLocal(goals), [goals]);
 
   function field(key, label, unit) {
-    return (
+  return (
+  
       <div className="mb-3">
         <div className="flex items-baseline justify-between mb-1">
           <span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{label}</span>
@@ -1055,7 +1062,31 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
   }
 
   return (
-    <div>
+    <div>      
+    <div
+      className="flex items-center justify-between p-4 mb-4"
+      style={{ background: C.card, borderRadius: 18 }}
+    >
+      <span
+        className="ft-body"
+        style={{ fontSize: 14, fontWeight: 600, color: C.ink }}
+      >
+        🌙 Dark Mode
+      </span>
+
+      <button
+        onClick={() => setDarkMode(!darkMode)}
+        className="px-4 py-2 rounded-full"
+        style={{
+          background: darkMode ? C.green : C.track,
+          color: darkMode ? "#fff" : C.ink,
+          border: "none",
+        }}
+      >
+        {darkMode ? "ON" : "OFF"}
+      </button>
+    </div>
+
       <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Daily goals</div>
       {field("calories", "Calories", "kcal")}{field("protein", "Protein", "g")}{field("carbs", "Carbohydrates", "g")}{field("fat", "Fat", "g")}
       <button onClick={async () => { await onSaveGoals(local); setSaved(true); }} className="w-full flex items-center justify-center gap-2 py-3 rounded-full ft-body mb-6"
