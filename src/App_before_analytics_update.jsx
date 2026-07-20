@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis,
-  CartesianGrid, Tooltip, Legend, ReferenceLine
+  CartesianGrid, Tooltip, Legend
 } from "recharts";
 
 // ---------- Design tokens ----------
@@ -64,10 +64,7 @@ let C = LIGHT;
 
 
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
-// Local-calendar-day date string (was previously toISOString(), which is UTC and
-// drifts a full day off the user's actual local date depending on timezone/time).
-const localDateStr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const todayStr = () => localDateStr(new Date());
+const todayStr = () => new Date().toISOString().slice(0, 10);
 const fmtDate = (d) => new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 const fmtDateTime = (d) => new Date(d).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
@@ -78,144 +75,7 @@ function greeting() {
   if (h < 17) return "Good Afternoon";
   return "Good Night";
 }
-function daysAgo(n) { const d = new Date(); d.setDate(d.getDate() - n); return localDateStr(d); }
-// Weekday check on a "YYYY-MM-DD" local date string (Mon-Fri). Parses components
-// manually (not `new Date(dateStr)`) to avoid that string being read as UTC midnight.
-function isWeekday(dateStr) {
-  const [y, m, day] = dateStr.split("-").map(Number);
-  const dow = new Date(y, m - 1, day).getDay();
-  return dow >= 1 && dow <= 5;
-}
-
-// ---------- Weight pace projection ----------
-// Least-squares slope (kg/day) over the most recent entries (last 42 days, or all
-// entries if fewer than that span exists). Returns null if there isn't enough data.
-function computeWeightPace(weights) {
-  const sorted = [...weights].sort((a, b) => a.timestamp - b.timestamp);
-  if (sorted.length < 2) return null;
-  const cutoff = Date.now() - 42 * 86400000;
-  const windowed = sorted.filter((w) => w.timestamp >= cutoff);
-  const pts = windowed.length >= 2 ? windowed : sorted;
-  const t0 = pts[0].timestamp;
-  const xs = pts.map((p) => (p.timestamp - t0) / 86400000);
-  const ys = pts.map((p) => num(p.weight));
-  const n = pts.length;
-  const sumX = xs.reduce((a, b) => a + b, 0), sumY = ys.reduce((a, b) => a + b, 0);
-  const sumXY = xs.reduce((a, x, i) => a + x * ys[i], 0);
-  const sumXX = xs.reduce((a, x) => a + x * x, 0);
-  const denom = n * sumXX - sumX * sumX;
-  const slopePerDay = denom !== 0 ? (n * sumXY - sumX * sumY) / denom : 0;
-  return {
-    currentWeight: ys[ys.length - 1],
-    paceKgPerWeek: slopePerDay * 7,
-    pointsUsed: n,
-  };
-}
-
-function projectWeeksToGoal(currentWeight, goalWeight, paceKgPerWeek) {
-  if (!goalWeight || Math.abs(paceKgPerWeek) < 0.01) return null;
-  const remaining = goalWeight - currentWeight;
-  const weeks = remaining / paceKgPerWeek;
-  if (weeks <= 0) return { onTrack: false };
-  return { onTrack: true, weeks: Math.round(weeks * 10) / 10 };
-}
-
-// ---------- Insight callouts ----------
-// Small set of deterministic, locally-computed observations (no AI call) drawn
-// from logged meals/workouts vs. the user's goals.
-function generateInsights(logs, exerciseLogs, goals) {
-  const insights = [];
-  const cutoff = daysAgo(27); // trailing 4-week window keeps insights recent but not noisy
-  const recentLogs = logs.filter((l) => l.date >= cutoff);
-
-  // 1) Weekday vs weekend protein pattern
-  const weekdayP = recentLogs.filter((l) => isWeekday(l.date));
-  const weekendP = recentLogs.filter((l) => !isWeekday(l.date));
-  const avgProteinByDay = (arr) => {
-    const byDate = {};
-    arr.forEach((l) => { byDate[l.date] = (byDate[l.date] || 0) + num(l.protein_g); });
-    const vals = Object.values(byDate);
-    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
-  };
-  const wdAvg = avgProteinByDay(weekdayP), weAvg = avgProteinByDay(weekendP);
-  if (wdAvg != null && weAvg != null && wdAvg < weAvg * 0.85 && wdAvg < goals.protein * 0.9) {
-    insights.push({
-      icon: Dumbbell, color: C.purple, bg: C.purpleTint,
-      text: `Consistently low on protein on weekdays — averaging ${Math.round(wdAvg)}g vs ${Math.round(weAvg)}g on weekends.`,
-    });
-  }
-
-  // 2) Calorie average vs goal over the last 14 logged days
-  const last14Dates = [...new Set(recentLogs.map((l) => l.date))].sort().slice(-14);
-  if (last14Dates.length >= 4 && goals.calories > 0) {
-    const byDate = {};
-    recentLogs.forEach((l) => { if (last14Dates.includes(l.date)) byDate[l.date] = (byDate[l.date] || 0) + num(l.calories); });
-    const vals = Object.values(byDate);
-    const avgCal = vals.reduce((a, b) => a + b, 0) / vals.length;
-    const pctOff = (avgCal - goals.calories) / goals.calories;
-    if (Math.abs(pctOff) >= 0.15) {
-      insights.push({
-        icon: Flame, color: C.orange, bg: C.orangeTint,
-        text: `Averaging ${Math.round(avgCal)} kcal/day over your last ${vals.length} logged days — about ${Math.round(Math.abs(pctOff) * 100)}% ${pctOff > 0 ? "above" : "below"} your ${goals.calories} kcal goal.`,
-      });
-    }
-  }
-
-  // 3) Workout frequency trend: this week vs. the week before
-  const thisWeekStart = daysAgo(6), lastWeekStart = daysAgo(13), lastWeekEnd = daysAgo(7);
-  const thisWeekSessions = new Set(exerciseLogs.filter((e) => e.date >= thisWeekStart).map((e) => e.date)).size;
-  const lastWeekSessions = new Set(exerciseLogs.filter((e) => e.date >= lastWeekStart && e.date <= lastWeekEnd).map((e) => e.date)).size;
-  if (lastWeekSessions >= 2 && thisWeekSessions <= Math.max(0, lastWeekSessions - 2)) {
-    insights.push({
-      icon: TrendingDown, color: C.pink, bg: C.pinkTint,
-      text: `Workout frequency dropped — ${thisWeekSessions} session${thisWeekSessions === 1 ? "" : "s"} this week vs ${lastWeekSessions} the week before.`,
-    });
-  } else if (thisWeekSessions >= 3 && thisWeekSessions > lastWeekSessions) {
-    insights.push({
-      icon: TrendingUp, color: C.green, bg: C.greenTint,
-      text: `Nice consistency — ${thisWeekSessions} workout sessions this week, up from ${lastWeekSessions}.`,
-    });
-  }
-
-  return insights;
-}
-
-// ---------- Weekly / monthly summary ----------
-// Averages are computed over the fixed period length (7 or 30 days), not just days
-// with entries, so they read as a true daily average for that stretch.
-function computePeriodSummary(logs, days) {
-  const periodStart = daysAgo(days - 1);
-  const prevStart = daysAgo(days * 2 - 1);
-  const prevEnd = daysAgo(days);
-  const sum = (arr, key) => arr.reduce((a, l) => a + num(l[key]), 0);
-  const current = logs.filter((l) => l.date >= periodStart);
-  const previous = logs.filter((l) => l.date >= prevStart && l.date <= prevEnd);
-  const avg = (arr, key) => arr.length ? sum(arr, key) / days : 0;
-  const trend = (curVal, prevVal) => {
-    if (prevVal === 0) return curVal === 0 ? "flat" : "up";
-    const delta = (curVal - prevVal) / prevVal;
-    if (Math.abs(delta) < 0.05) return "flat";
-    return delta > 0 ? "up" : "down";
-  };
-  const curCal = avg(current, "calories"), prevCal = avg(previous, "calories");
-  const curP = avg(current, "protein_g"), prevP = avg(previous, "protein_g");
-  const curC = avg(current, "carbs_g"), prevC = avg(previous, "carbs_g");
-  const curF = avg(current, "fat_g"), prevF = avg(previous, "fat_g");
-  return {
-    avgCalories: Math.round(curCal),
-    avgProtein: Math.round(curP), proteinTrend: trend(curP, prevP),
-    avgCarbs: Math.round(curC), carbsTrend: trend(curC, prevC),
-    avgFat: Math.round(curF), fatTrend: trend(curF, prevF),
-    calorieTrend: trend(curCal, prevCal),
-    daysLogged: new Set(current.map((l) => l.date)).size,
-  };
-}
-
-function TrendArrow({ trend, size = 12 }) {
-  if (trend === "up") return <TrendingUp size={size} color={C.green} />;
-  if (trend === "down") return <TrendingDown size={size} color={C.pink} />;
-  return <Minus size={size} color={C.inkSoft} />;
-}
+function daysAgo(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); }
 
 // ---------- Storage helpers ----------
 // NOTE: window.storage.get/set is an API only available inside Claude.ai Artifacts.
@@ -533,10 +393,9 @@ export default function MealTracker() {
   const [addMode, setAddMode] = useState("photo");
   const [logsSubTab, setLogsSubTab] = useState("meals");
   const [chartsSubTab, setChartsSubTab] = useState("nutrition");
-  const [chartsPeriod, setChartsPeriod] = useState("week");
 
   const [profile, setProfile] = useState({ name: "" });
-  const [goals, setGoals] = useState({ calories: 2000, protein: 120, carbs: 220, fat: 65, targetWeight: 0 });
+  const [goals, setGoals] = useState({ calories: 2000, protein: 120, carbs: 220, fat: 65 });
   const [logs, setLogs] = useState([]);
   const [weights, setWeights] = useState([]);
   const [exerciseLogs, setExerciseLogs] = useState([]);
@@ -547,13 +406,13 @@ export default function MealTracker() {
     (async () => {
       const [p, g, l, w, e, f] = await Promise.all([
         loadKey("profile", { name: "" }),
-        loadKey("goals", { calories: 2000, protein: 120, carbs: 220, fat: 65, targetWeight: 0 }),
+        loadKey("goals", { calories: 2000, protein: 120, carbs: 220, fat: 65 }),
         loadKey("meal-logs", []),
         loadKey("weight-logs", []),
         loadKey("exercise-logs", []),
         loadKey("favorite-meals", []),
       ]);
-      setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, targetWeight: 0, ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setReady(true);
+      setProfile(p); setGoals(g); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setReady(true);
     })();
   }, []);
 
@@ -579,23 +438,8 @@ export default function MealTracker() {
     const dates = new Set(logs.map((l) => l.date));
     let s = 0; let d = new Date();
     if (!dates.has(todayStr())) d.setDate(d.getDate() - 1);
-    while (dates.has(localDateStr(d))) { s++; d.setDate(d.getDate() - 1); }
+    while (dates.has(d.toISOString().slice(0, 10))) { s++; d.setDate(d.getDate() - 1); }
     return s;
-  }, [logs]);
-
-  // Longest-ever run of consecutive logging days (any date in range, not just the
-  // current run) — used by the Summary view.
-  const bestStreak = useMemo(() => {
-    const dates = [...new Set(logs.map((l) => l.date))].sort();
-    if (dates.length === 0) return 0;
-    let best = 1, run = 1;
-    for (let i = 1; i < dates.length; i++) {
-      const prev = new Date(dates[i - 1]); const cur = new Date(dates[i]);
-      const diffDays = Math.round((cur - prev) / 86400000);
-      run = diffDays === 1 ? run + 1 : 1;
-      if (run > best) best = run;
-    }
-    return best;
   }, [logs]);
 
   const weekExercise = useMemo(() => {
@@ -653,15 +497,10 @@ export default function MealTracker() {
     });
   }, [logs, exerciseLogs]);
   const weightSeries = useMemo(() => [...weights].sort((a, b) => a.timestamp - b.timestamp).map((w) => ({ date: fmtDate(w.date), weight: w.weight })), [weights]);
-  const weightPace = useMemo(() => computeWeightPace(weights), [weights]);
-  const weightProjection = useMemo(() => weightPace ? projectWeeksToGoal(weightPace.currentWeight, goals.targetWeight, weightPace.paceKgPerWeek) : null, [weightPace, goals.targetWeight]);
-  const insights = useMemo(() => generateInsights(logs, exerciseLogs, goals), [logs, exerciseLogs, goals]);
-  const periodSummary = useMemo(() => computePeriodSummary(logs, chartsPeriod === "week" ? 7 : 30), [logs, chartsPeriod]);
 
   if (!ready) return <div className="flex items-center justify-center" style={{ height: 700, background: C.bgTop }}><Loader2 className="animate-spin" size={22} color={C.orange} /></div>;
 
-  const trimmedName = profile.name ? profile.name.trim() : "";
-  const initial = trimmedName ? trimmedName[0].toUpperCase() : "U";
+  const initial = profile.name ? profile.name.trim()[0].toUpperCase() : "U";
   const eatenPct = goals.calories > 0 ? (todayTotals.calories / goals.calories) * 100 : 0;
   const remaining = Math.max(0, Math.round(goals.calories - todayTotals.calories));
 
@@ -830,21 +669,9 @@ export default function MealTracker() {
 
         {tab === "charts" && (
           <div>
-            {insights.length > 0 && (
-              <div className="flex flex-col gap-2 mb-4">
-                {insights.map((ins, i) => (
-                  <div key={i} className="flex items-start gap-2.5 p-3" style={{ background: ins.bg, borderRadius: 16 }}>
-                    <div style={{ marginTop: 1, flexShrink: 0 }}><ins.icon size={15} color={ins.color} /></div>
-                    <span className="ft-body" style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.4 }}>{ins.text}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
             <div className="flex gap-2 mb-4">
               <Chip active={chartsSubTab === "nutrition"} onClick={() => setChartsSubTab("nutrition")} label="Nutrition" />
               <Chip active={chartsSubTab === "exercise"} onClick={() => setChartsSubTab("exercise")} label="Exercise" />
-              <Chip active={chartsSubTab === "summary"} onClick={() => setChartsSubTab("summary")} label="Summary" />
             </div>
 
             {chartsSubTab === "nutrition" ? (
@@ -877,43 +704,21 @@ export default function MealTracker() {
                   </ResponsiveContainer>
                 </div>
                 <div className="p-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Weight</span>
-                    {goals.targetWeight > 0 && <span className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>Goal: {goals.targetWeight}</span>}
-                  </div>
+                  <div className="ft-body mb-2" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Weight</div>
                   {weightSeries.length === 0 ? <EmptyState text="Log a weight entry in Profile to see your trend." compact /> : (
-                    <>
-                      <ResponsiveContainer width="100%" height={150}>
-                        <LineChart data={weightSeries}>
-                          <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
-                          <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} />
-                          <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={34} domain={["dataMin - 2", "dataMax + 2"]} />
-                          <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}` }} />
-                          {goals.targetWeight > 0 && (
-                            <ReferenceLine y={goals.targetWeight} stroke={C.green} strokeDasharray="4 4" strokeWidth={1.5}
-                              label={{ value: "Goal", position: "insideTopRight", fill: C.green, fontSize: 10 }} />
-                          )}
-                          <Line type="monotone" dataKey="weight" stroke={C.ink} strokeWidth={2} dot={{ r: 3 }} />
-                        </LineChart>
-                      </ResponsiveContainer>
-                      <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
-                        {!weightPace ? (
-                          <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>Log at least 2 weigh-ins to see a pace projection.</span>
-                        ) : !goals.targetWeight ? (
-                          <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>Currently {weightPace.paceKgPerWeek > 0 ? "gaining" : weightPace.paceKgPerWeek < 0 ? "losing" : "holding steady at"} {Math.abs(weightPace.paceKgPerWeek).toFixed(2)}/week. Set a goal weight in Profile to see a projection.</span>
-                        ) : !weightProjection ? (
-                          <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>Weight has been stable — no clear pace to project from yet.</span>
-                        ) : weightProjection.onTrack ? (
-                          <span className="ft-body" style={{ fontSize: 11.5, color: C.green, fontWeight: 600 }}>On pace ({weightPace.paceKgPerWeek > 0 ? "+" : ""}{weightPace.paceKgPerWeek.toFixed(2)}/week) to reach your goal in ~{weightProjection.weeks} weeks.</span>
-                        ) : (
-                          <span className="ft-body" style={{ fontSize: 11.5, color: C.pink, fontWeight: 600 }}>Current pace ({weightPace.paceKgPerWeek > 0 ? "+" : ""}{weightPace.paceKgPerWeek.toFixed(2)}/week) is moving away from your goal.</span>
-                        )}
-                      </div>
-                    </>
+                    <ResponsiveContainer width="100%" height={150}>
+                      <LineChart data={weightSeries}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+                        <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} />
+                        <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={34} domain={["dataMin - 2", "dataMax + 2"]} />
+                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}` }} />
+                        <Line type="monotone" dataKey="weight" stroke={C.ink} strokeWidth={2} dot={{ r: 3 }} />
+                      </LineChart>
+                    </ResponsiveContainer>
                   )}
                 </div>
               </>
-            ) : chartsSubTab === "exercise" ? (
+            ) : (
               <>
                 <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                   <div className="ft-body mb-2" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Training volume (kg/day)</div>
@@ -942,45 +747,6 @@ export default function MealTracker() {
                       </BarChart>
                     </ResponsiveContainer>
                   )}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex gap-2 mb-4">
-                  <Chip active={chartsPeriod === "week"} onClick={() => setChartsPeriod("week")} label="This week" />
-                  <Chip active={chartsPeriod === "month"} onClick={() => setChartsPeriod("month")} label="This month" />
-                </div>
-                <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Avg calories/day</span>
-                    <TrendArrow trend={periodSummary.calorieTrend} />
-                  </div>
-                  <div className="ft-display" style={{ fontSize: 30, fontWeight: 700, color: C.ink }}>{periodSummary.avgCalories}<span className="ft-body" style={{ fontSize: 13, color: C.inkSoft, fontWeight: 500 }}> / {goals.calories} kcal</span></div>
-                  <div className="ft-body" style={{ fontSize: 11, color: C.inkSoft, marginTop: 2 }}>{periodSummary.daysLogged} of {chartsPeriod === "week" ? 7 : 30} days logged</div>
-                </div>
-                <div className="flex gap-2.5 mb-4">
-                  <div className="flex-1 p-3" style={{ background: C.card, borderRadius: 18 }}>
-                    <div className="flex items-center justify-between mb-1"><span className="ft-body" style={{ fontSize: 11, color: C.inkSoft, fontWeight: 600 }}>Protein</span><TrendArrow trend={periodSummary.proteinTrend} size={11} /></div>
-                    <div className="ft-mono" style={{ fontSize: 16, fontWeight: 700, color: C.purple }}>{periodSummary.avgProtein}g</div>
-                  </div>
-                  <div className="flex-1 p-3" style={{ background: C.card, borderRadius: 18 }}>
-                    <div className="flex items-center justify-between mb-1"><span className="ft-body" style={{ fontSize: 11, color: C.inkSoft, fontWeight: 600 }}>Carbs</span><TrendArrow trend={periodSummary.carbsTrend} size={11} /></div>
-                    <div className="ft-mono" style={{ fontSize: 16, fontWeight: 700, color: C.tan }}>{periodSummary.avgCarbs}g</div>
-                  </div>
-                  <div className="flex-1 p-3" style={{ background: C.card, borderRadius: 18 }}>
-                    <div className="flex items-center justify-between mb-1"><span className="ft-body" style={{ fontSize: 11, color: C.inkSoft, fontWeight: 600 }}>Fat</span><TrendArrow trend={periodSummary.fatTrend} size={11} /></div>
-                    <div className="ft-mono" style={{ fontSize: 16, fontWeight: 700, color: C.pink }}>{periodSummary.avgFat}g</div>
-                  </div>
-                </div>
-                <div className="flex gap-2.5">
-                  <div className="flex-1 flex items-center gap-2.5 p-3.5" style={{ background: C.card, borderRadius: 18 }}>
-                    <div style={{ width: 34, height: 34, borderRadius: 10, background: C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Trophy size={16} color={C.pink} /></div>
-                    <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{streak}</div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>current streak</div></div>
-                  </div>
-                  <div className="flex-1 flex items-center gap-2.5 p-3.5" style={{ background: C.card, borderRadius: 18 }}>
-                    <div style={{ width: 34, height: 34, borderRadius: 10, background: C.tanTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Trophy size={16} color={C.tan} /></div>
-                    <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{bestStreak}</div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>best streak</div></div>
-                  </div>
                 </div>
               </>
             )}
@@ -1511,7 +1277,6 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
 
       <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Daily goals</div>
       {field("calories", "Calories", "kcal")}{field("protein", "Protein", "g")}{field("carbs", "Carbohydrates", "g")}{field("fat", "Fat", "g")}
-      {field("targetWeight", "Goal weight", "kg (0 = off)")}
       <button onClick={async () => { await onSaveGoals(local); setSaved(true); }} className="w-full flex items-center justify-center gap-2 py-3 rounded-full ft-body mb-6"
         style={{ background: saved ? C.track : C.orange, color: saved ? C.ink : "#fff", fontSize: 14, fontWeight: 600 }}>{saved ? <><Check size={16} /> Saved</> : "Save goals"}</button>
 
