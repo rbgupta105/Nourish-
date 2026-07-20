@@ -780,7 +780,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave }) {
     setError(null); setAdvising(true);
     try {
       const promptText = buildPortionAdvicePrompt({ pending, goals, todayTotals, todayLogs });
-      const raw = await callgemini([{ type: "text", text: promptText }]);
+      const raw = await callGemini([{ type: "text", text: promptText }]);
       const parsed = parseJSON(raw);
       setPending((p) => ({ ...p, portion_verdict: parsed.portion_verdict || "keep", portion_change_percent: num(parsed.portion_change_percent), portion_guidance: parsed.portion_guidance || "" }));
     } catch (e) {
@@ -895,7 +895,7 @@ function ExerciseForm({ exerciseLogs, onSave }) {
     try {
       const entry = buildEntry();
       const history = exerciseLogs.filter((e) => e.name.trim().toLowerCase() === name.trim().toLowerCase()).slice(0, 5).reverse();
-      const raw = await callgemini([{ type: "text", text: buildExercisePrompt({ entry, history }) }]);
+      const raw = await callGemini([{ type: "text", text: buildExercisePrompt({ entry, history }) }]);
       const parsed = parseJSON(raw);
       setAi({
         muscle_groups: Array.isArray(parsed.muscle_groups) ? parsed.muscle_groups : [],
