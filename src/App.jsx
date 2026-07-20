@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   Camera, Type, Utensils, ClipboardList, BarChart3, User, Plus,
   Trash2, Loader2, TrendingUp, TrendingDown, Minus, X, Check,
@@ -57,21 +58,22 @@ async function saveKey(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; }
 }
 
-// ---------- Claude API ----------
-// NOTE: Anthropic's API cannot be called directly from a browser (no CORS support,
-// and it would expose your API key to anyone viewing the page). This calls a
-// same-origin proxy endpoint instead — see /server for a minimal Express proxy,
-// and vite.config.js for the dev-server proxy rule that forwards it there.
-const CLAUDE_API_URL = import.meta.env.VITE_CLAUDE_API_URL || "/api/messages";
-async function callClaude(contentBlocks) {
-  const response = await fetch(CLAUDE_API_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content: contentBlocks }] }),
+// ---------- Gemini API ----------
+
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+
+async function callGemini(contentBlocks) {
+  const model = genAI.getGenerativeModel({
+    model: "gemini-1.5-flash"
   });
-  if (!response.ok) throw new Error("Request to the model failed (" + response.status + ")");
-  const data = await response.json();
-  return (data.content || []).map((b) => (b.type === "text" ? b.text : "")).filter(Boolean).join("\n");
+
+  const result = await model.generateContent(contentBlocks);
+
+  const response = await result.response;
+
+  return response.text();
 }
 function parseJSON(raw) {
   let cleaned = raw.trim().replace(/^```json/i, "").replace(/^```/, "").replace(/```$/, "").trim();
@@ -733,7 +735,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave }) {
       const blocks = mode === "photo"
         ? [{ type: "image", source: { type: "base64", media_type: imagePreview.mediaType, data: imagePreview.b64 } }, { type: "text", text: promptText }]
         : [{ type: "text", text: promptText }];
-      const raw = await callClaude(blocks);
+      const raw = await callgemini(blocks);
       const parsed = parseJSON(raw);
       setPending({
         food_name: parsed.food_name || (mode === "text" ? description : "Logged meal"),
@@ -756,7 +758,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave }) {
     setError(null); setAdvising(true);
     try {
       const promptText = buildPortionAdvicePrompt({ pending, goals, todayTotals, todayLogs });
-      const raw = await callClaude([{ type: "text", text: promptText }]);
+      const raw = await callgemini([{ type: "text", text: promptText }]);
       const parsed = parseJSON(raw);
       setPending((p) => ({ ...p, portion_verdict: parsed.portion_verdict || "keep", portion_change_percent: num(parsed.portion_change_percent), portion_guidance: parsed.portion_guidance || "" }));
     } catch (e) {
@@ -871,7 +873,7 @@ function ExerciseForm({ exerciseLogs, onSave }) {
     try {
       const entry = buildEntry();
       const history = exerciseLogs.filter((e) => e.name.trim().toLowerCase() === name.trim().toLowerCase()).slice(0, 5).reverse();
-      const raw = await callClaude([{ type: "text", text: buildExercisePrompt({ entry, history }) }]);
+      const raw = await callgemini([{ type: "text", text: buildExercisePrompt({ entry, history }) }]);
       const parsed = parseJSON(raw);
       setAi({
         muscle_groups: Array.isArray(parsed.muscle_groups) ? parsed.muscle_groups : [],
