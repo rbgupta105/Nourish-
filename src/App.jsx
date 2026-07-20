@@ -696,10 +696,31 @@ export default function MealTracker() {
           </div>
         )}
 
-        {tab === "profile" && <ProfilePanel goals={goals} onSaveGoals={persistGoals} weights={weights}
-          onAddWeight={async (w) => { const entry = { id: uid(), date: todayStr(), timestamp: Date.now(), weight: w }; await persistWeights([entry, ...weights.filter((x) => x.date !== todayStr())]); }}
-          onDeleteWeight={async (id) => persistWeights(weights.filter((w) => w.id !== id))}
-          />}
+       {tab === "profile" && (
+  <ProfilePanel
+    goals={goals}
+    onSaveGoals={persistGoals}
+    weights={weights}
+    onAddWeight={async (w) => {
+      const entry = {
+        id: uid(),
+        date: todayStr(),
+        timestamp: Date.now(),
+        weight: w,
+      };
+      await persistWeights([
+        entry,
+        ...weights.filter((x) => x.date !== todayStr()),
+      ]);
+    }}
+    onDeleteWeight={async (id) =>
+      persistWeights(weights.filter((w) => w.id !== id))
+    }
+    darkMode={darkMode}
+    setDarkMode={setDarkMode}
+  />
+)}
+
       </div>
 
       <div className="absolute left-4 right-4 bottom-4 flex items-center" style={{ background: C.card, borderRadius: 30, boxShadow: "0 6px 20px rgba(20,20,20,0.14)", height: 64 }}>
