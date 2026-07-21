@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   Camera, Type, Utensils, ClipboardList, BarChart3, User, Plus,
   Trash2, Loader2, TrendingUp, TrendingDown, Minus, X, Check,
   Flame, Trophy, Dumbbell, Wheat, Droplet, AlertCircle, Home, Activity, Sparkles,
-  Star, Pencil, Copy, Droplets, ChevronLeft, ChevronRight, CalendarDays, Gauge
+  Star, Pencil, Copy
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis,
@@ -217,123 +217,6 @@ function TrendArrow({ trend, size = 12 }) {
   return <Minus size={size} color={C.inkSoft} />;
 }
 
-// ---------- Daily Nutrition Score ----------
-// Weighted 0-100 score blending how close today is to the calorie/protein/fiber/
-// water goals plus a simple "meal consistency" measure (meals logged vs. a
-// 3-meals/day target). Weights: calories 25, protein 25, fiber 20, water 15,
-// consistency 15.
-function computeNutritionScore({ todayTotals, todayLogs, goals, waterMl }) {
-  const calScore = goals.calories > 0
-    ? clamp(100 - Math.abs((todayTotals.calories - goals.calories) / goals.calories) * 150, 0, 100)
-    : 0;
-  const proteinScore = goals.protein > 0 ? clamp((todayTotals.protein / goals.protein) * 100, 0, 100) : 0;
-  const fiberGoal = goals.fiber || 28;
-  const fiberScore = clamp((todayTotals.fiber / fiberGoal) * 100, 0, 100);
-  const waterGoal = goals.water || 2000;
-  const waterScore = clamp((waterMl / waterGoal) * 100, 0, 100);
-  const consistencyScore = clamp((todayLogs.length / 3) * 100, 0, 100);
-
-  const weighted = {
-    calories: { score: calScore, weight: 0.25, label: "calorie target" },
-    protein: { score: proteinScore, weight: 0.25, label: "protein intake" },
-    fiber: { score: fiberScore, weight: 0.20, label: "fiber intake" },
-    water: { score: waterScore, weight: 0.15, label: "water intake" },
-    consistency: { score: consistencyScore, weight: 0.15, label: "meal consistency" },
-  };
-  const total = Math.round(Object.values(weighted).reduce((sum, c) => sum + c.score * c.weight, 0));
-
-  const entries = Object.entries(weighted);
-  const best = entries.reduce((a, b) => (b[1].score > a[1].score ? b : a));
-  const worst = entries.reduce((a, b) => (b[1].score < a[1].score ? b : a));
-
-  const praise = {
-    calories: "Right on target with calories.",
-    protein: "Great protein intake.",
-    fiber: "Solid fiber intake.",
-    water: "Well hydrated today.",
-    consistency: "Great meal consistency.",
-  };
-  const fixes = {
-    calories: () => `Aim closer to your ${goals.calories} kcal goal.`,
-    protein: () => `Add ~${Math.max(0, Math.round(goals.protein - todayTotals.protein))}g more protein.`,
-    fiber: () => `Increase fiber by ~${Math.max(0, Math.round(fiberGoal - todayTotals.fiber))}g.`,
-    water: () => `Drink ~${Math.max(0, Math.round((waterGoal - waterMl) / 250))} more glass(es) of water.`,
-    consistency: () => `Log ${Math.max(0, 3 - todayLogs.length)} more meal(s) today.`,
-  };
-
-  const summary = worst[1].score >= 90
-    ? `${praise[best[0]]} You're on track across the board.`
-    : `${praise[best[0]]} ${fixes[worst[0]]()}`;
-
-  return { total, summary, breakdown: weighted };
-}
-
-// ---------- Micronutrient tracking ----------
-// Fiber and sodium come from the meal's own numeric fields; the rest are
-// aggregated from each meal's freeform `micronutrients` %DV list (summed across
-// today's meals) since the AI schema doesn't return them as first-class fields.
-const MICRO_KEYWORD_DEFS = [
-  { key: "calcium", label: "Calcium", match: /calcium/i },
-  { key: "iron", label: "Iron", match: /\biron\b/i },
-  { key: "b12", label: "Vitamin B12", match: /b[- ]?12/i },
-  { key: "vitaminD", label: "Vitamin D", match: /vitamin d\b/i },
-  { key: "potassium", label: "Potassium", match: /potassium/i },
-];
-function computeMicronutrientSummary(todayLogs, goals) {
-  const pctTotals = Object.fromEntries(MICRO_KEYWORD_DEFS.map((d) => [d.key, 0]));
-  todayLogs.forEach((l) => {
-    (Array.isArray(l.micronutrients) ? l.micronutrients : []).forEach((m) => {
-      if (m.percent_dv == null || !m.name) return;
-      const def = MICRO_KEYWORD_DEFS.find((d) => d.match.test(m.name));
-      if (def) pctTotals[def.key] += num(m.percent_dv);
-    });
-  });
-  const fiberGoal = goals.fiber || 28;
-  const fiberTotal = todayLogs.reduce((s, l) => s + num(l.fiber_g), 0);
-  const sodiumTotal = todayLogs.reduce((s, l) => s + num(l.sodium_mg), 0);
-  const sodiumLimit = 2300; // standard daily recommended upper limit
-  return [
-    { key: "fiber", label: "Fiber", value: Math.round(fiberTotal), unit: "g", pct: clamp((fiberTotal / fiberGoal) * 100, 0, 999), color: C.green },
-    { key: "sodium", label: "Sodium", value: Math.round(sodiumTotal), unit: "mg", pct: clamp((sodiumTotal / sodiumLimit) * 100, 0, 999), color: C.pink, capIsLimit: true },
-    ...MICRO_KEYWORD_DEFS.map((d) => ({ key: d.key, label: d.label, value: Math.round(pctTotals[d.key]), unit: "% DV", pct: clamp(pctTotals[d.key], 0, 999), color: C.blue, isPct: true })),
-  ];
-}
-
-// ---------- Weekly goal achievement ----------
-// For each of the last 7 local-calendar days, checks whether that day's totals
-// landed within a reasonable band of the calorie/protein goals.
-function computeWeeklyAchievement(logs, goals) {
-  const days = []; for (let i = 6; i >= 0; i--) days.push(daysAgo(i));
-  const perDay = days.map((date) => {
-    const dayLogs = logs.filter((l) => l.date === date);
-    const cal = dayLogs.reduce((s, l) => s + num(l.calories), 0);
-    const protein = dayLogs.reduce((s, l) => s + num(l.protein_g), 0);
-    const calHit = goals.calories > 0 && cal >= goals.calories * 0.9 && cal <= goals.calories * 1.15;
-    const proteinHit = goals.protein > 0 && protein >= goals.protein * 0.9;
-    return { date, calHit, proteinHit, hasLogs: dayLogs.length > 0 };
-  });
-  return {
-    perDay,
-    caloriesAchieved: perDay.filter((d) => d.calHit).length,
-    proteinAchieved: perDay.filter((d) => d.proteinHit).length,
-    totalDays: 7,
-  };
-}
-
-function AchievementBar({ perDay, hitKey }) {
-  return (
-    <div className="flex gap-1">
-      {perDay.map((d, i) => (
-        <div key={i} style={{
-          flex: 1, height: 8, borderRadius: 4,
-          background: d[hitKey] ? C.green : d.hasLogs ? C.pink : C.track,
-          opacity: d[hitKey] ? 1 : d.hasLogs ? 0.55 : 0.4,
-        }} />
-      ))}
-    </div>
-  );
-}
-
 // ---------- Storage helpers ----------
 // NOTE: window.storage.get/set is an API only available inside Claude.ai Artifacts.
 // This standalone project uses the browser's localStorage instead, with the same shape.
@@ -396,50 +279,6 @@ function fileToBase64(file) {
     r.onload = () => resolve(r.result.split(",")[1]);
     r.onerror = () => reject(new Error("Could not read image file"));
     r.readAsDataURL(file);
-  });
-}
-
-// ---------- Haptics ----------
-// Best-effort tactile feedback for save/delete actions. No-ops silently on
-// devices/browsers without the Vibration API (e.g. iOS Safari, desktop).
-function haptic(kind = "light") {
-  try {
-    if (!("vibrate" in navigator)) return;
-    const patterns = { light: 12, success: [10, 40, 14], delete: [16, 30, 16] };
-    navigator.vibrate(patterns[kind] ?? 12);
-  } catch { /* vibration not supported/allowed — ignore */ }
-}
-
-// ---------- Image compression ----------
-// Downscales + re-encodes a photo client-side before it's sent to Gemini, cutting
-// upload size/time and token cost. Longest side is capped and JPEG quality kept
-// fairly high (0.82) so food detail the model relies on isn't degraded.
-function compressImageFile(file, { maxDimension = 1280, quality = 0.82 } = {}) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      try {
-        let { width, height } = img;
-        if (width > maxDimension || height > maxDimension) {
-          const scale = maxDimension / Math.max(width, height);
-          width = Math.round(width * scale);
-          height = Math.round(height * scale);
-        }
-        const canvas = document.createElement("canvas");
-        canvas.width = width; canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL("image/jpeg", quality);
-        URL.revokeObjectURL(url);
-        resolve({ b64: dataUrl.split(",")[1], mediaType: "image/jpeg" });
-      } catch (e) {
-        URL.revokeObjectURL(url);
-        reject(e);
-      }
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Could not read image file")); };
-    img.src = url;
   });
 }
 
@@ -530,20 +369,15 @@ Make progression_suggestion concrete and numeric where possible (a specific weig
 
 // ---------- Ring ----------
 function Ring({ size, stroke, pct, trackColor, fillColor, children }) {
-  const [animatedPct, setAnimatedPct] = useState(0);
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => setAnimatedPct(pct));
-    return () => cancelAnimationFrame(raf);
-  }, [pct]);
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
-  const offset = c - (clamp(animatedPct, 0, 100) / 100) * c;
+  const offset = c - (clamp(pct, 0, 100) / 100) * c;
   return (
     <div style={{ position: "relative", width: size, height: size }}>
       <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
         <circle cx={size / 2} cy={size / 2} r={r} stroke={trackColor} strokeWidth={stroke} fill="none" />
         <circle cx={size / 2} cy={size / 2} r={r} stroke={fillColor} strokeWidth={stroke} fill="none"
-          strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round" style={{ transition: "stroke-dashoffset .7s cubic-bezier(.22,.9,.34,1)" }} />
+          strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round" style={{ transition: "stroke-dashoffset .5s ease" }} />
       </svg>
       <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>{children}</div>
     </div>
@@ -606,23 +440,6 @@ function PortionBadge({ verdict, percent }) {
   );
 }
 
-// Skeleton placeholder mirroring the NutritionLabel's shape while the AI call is
-// in flight, so the layout doesn't jump once real data lands.
-function NutritionSkeleton() {
-  const bar = (w, h = 12) => <div style={{ width: w, height: h, borderRadius: 6, background: C.track, opacity: 0.7 }} className="skeleton-pulse" />;
-  return (
-    <div className="p-4 mt-3" style={{ background: C.card, border: `2px solid ${C.line}`, borderRadius: 16 }}>
-      <style>{`@keyframes skeletonPulse{0%,100%{opacity:.45}50%{opacity:.9}} .skeleton-pulse{animation:skeletonPulse 1.1s ease-in-out infinite}`}</style>
-      <div className="flex items-center justify-between mb-3">{bar(120, 16)}{bar(50, 22)}</div>
-      <div className="flex flex-col gap-2.5">
-        {[1, 2, 3, 4, 5].map((i) => (
-          <div key={i} className="flex items-center justify-between">{bar(90 + (i % 3) * 20)}{bar(36)}</div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function NutritionLabel({ data, editable, onChange }) {
   const row = (label, key, unit) => (
     <div className="flex items-center justify-between py-1" style={{ borderTop: `1px solid ${C.line}` }}>
@@ -661,18 +478,12 @@ function NutritionLabel({ data, editable, onChange }) {
   );
 }
 
-function MacroPill({ icon: Icon, iconBg, iconColor, label, value, unit, pct }) {
+function MacroPill({ icon: Icon, iconBg, iconColor, label, value, unit }) {
   return (
     <div className="flex-1 flex flex-col items-center gap-1.5 py-3 px-2" style={{ background: C.card, borderRadius: 22, boxShadow: "0 1px 3px rgba(20,20,20,0.06)" }}>
-      {pct != null ? (
-        <Ring size={34} stroke={3} pct={pct} trackColor={iconBg} fillColor={iconColor}>
-          <Icon size={14} color={iconColor} />
-        </Ring>
-      ) : (
-        <div style={{ width: 34, height: 34, borderRadius: "50%", background: iconBg, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <Icon size={16} color={iconColor} />
-        </div>
-      )}
+      <div style={{ width: 34, height: 34, borderRadius: "50%", background: iconBg, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <Icon size={16} color={iconColor} />
+      </div>
       <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 500 }}>{label}</span>
       <span className="ft-display" style={{ fontSize: 16, fontWeight: 700, color: C.green }}>{value}{unit}</span>
     </div>
@@ -697,101 +508,10 @@ function Chip({ active, onClick, label }) {
   );
 }
 
-function EmptyState({ text, compact, icon: Icon = Utensils }) {
+function EmptyState({ text, compact }) {
   return (
     <div className="flex flex-col items-center justify-center text-center" style={{ padding: compact ? "20px 0" : "40px 0" }}>
-      <div style={{
-        width: compact ? 48 : 64, height: compact ? 48 : 64, borderRadius: "50%",
-        background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12,
-      }}>
-        <Icon size={compact ? 20 : 26} color={C.orange} strokeWidth={1.6} />
-      </div>
-      <span className="ft-body" style={{ fontSize: 13, color: C.inkSoft, maxWidth: 220, lineHeight: 1.4 }}>{text}</span>
-    </div>
-  );
-}
-
-// ---------- Virtualized list ----------
-// Lightweight windowed-rendering container (no external dependency) so a meal
-// history with hundreds of entries stays smooth: only the rows near the visible
-// scroll position are actually mounted. Falls back to the normal flow layout for
-// short lists (see the VIRTUALIZE_THRESHOLD check at each call site).
-function VirtualList({ items, itemHeight, gap = 10, height, renderItem, overscan = 6 }) {
-  const [scrollTop, setScrollTop] = useState(0);
-  const rowHeight = itemHeight + gap;
-  const totalHeight = items.length * rowHeight - gap;
-  const visibleCount = Math.ceil(height / rowHeight) + overscan * 2;
-  const startIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
-  const endIndex = Math.min(items.length, startIndex + visibleCount);
-  const visible = items.slice(startIndex, endIndex);
-  return (
-    <div onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)} style={{ height, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
-      <div style={{ height: Math.max(totalHeight, 0), position: "relative" }}>
-        {visible.map((item, i) => {
-          const index = startIndex + i;
-          return (
-            <div key={item.id ?? index} style={{ position: "absolute", top: index * rowHeight, left: 0, right: 0, height: itemHeight }}>
-              {renderItem(item, index)}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-const VIRTUALIZE_THRESHOLD = 30;
-
-// ---------- Mini calendar (logged-days view) ----------
-// Compact month grid with colored dots marking days that have meal and/or
-// exercise entries. Tapping a day filters the Logs list to that date.
-function MiniCalendar({ mealDates, exerciseDates, selectedDate, onSelectDate }) {
-  const [monthCursor, setMonthCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
-  const year = monthCursor.getFullYear(), month = monthCursor.getMonth();
-  const firstDow = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const cells = [];
-  for (let i = 0; i < firstDow; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
-  const cellDate = (d) => `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  const isToday = (d) => cellDate(d) === todayStr();
-  const monthLabel = monthCursor.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-
-  return (
-    <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-1.5">
-          <CalendarDays size={15} color={C.ink} />
-          <span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{monthLabel}</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <button onClick={() => setMonthCursor((m) => { const n = new Date(m); n.setMonth(n.getMonth() - 1); return n; })} className="p-1.5"><ChevronLeft size={16} color={C.inkSoft} /></button>
-          <button onClick={() => setMonthCursor((m) => { const n = new Date(m); n.setMonth(n.getMonth() + 1); return n; })} className="p-1.5"><ChevronRight size={16} color={C.inkSoft} /></button>
-        </div>
-      </div>
-      <div className="grid grid-cols-7 gap-1 mb-1">
-        {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
-          <div key={i} className="ft-body text-center" style={{ fontSize: 10, color: C.inkSoft, fontWeight: 600 }}>{d}</div>
-        ))}
-      </div>
-      <div className="grid grid-cols-7 gap-1">
-        {cells.map((d, i) => {
-          if (d == null) return <div key={i} />;
-          const date = cellDate(d);
-          const hasMeal = mealDates.has(date), hasEx = exerciseDates.has(date);
-          const selected = selectedDate === date;
-          return (
-            <button key={i} onClick={() => onSelectDate(selected ? null : date)}
-              className="flex flex-col items-center justify-center"
-              style={{ aspectRatio: "1", borderRadius: 10, background: selected ? C.ink : "transparent" }}>
-              <span className="ft-mono" style={{ fontSize: 11, color: selected ? C.onInk : isToday(d) ? C.orange : C.ink, fontWeight: isToday(d) ? 700 : 500 }}>{d}</span>
-              <div className="flex gap-0.5 mt-0.5" style={{ height: 4 }}>
-                {hasMeal && <div style={{ width: 4, height: 4, borderRadius: 2, background: selected ? C.onInk : C.orange }} />}
-                {hasEx && <div style={{ width: 4, height: 4, borderRadius: 2, background: selected ? C.onInk : C.blue }} />}
-              </div>
-            </button>
-          );
-        })}
-      </div>
+      <span className="ft-body" style={{ fontSize: 13, color: C.inkSoft }}>{text}</span>
     </div>
   );
 }
@@ -812,68 +532,36 @@ export default function MealTracker() {
   const [addLogType, setAddLogType] = useState("meal");
   const [addMode, setAddMode] = useState("photo");
   const [logsSubTab, setLogsSubTab] = useState("meals");
-  const [logsDateFilter, setLogsDateFilter] = useState(null);
   const [chartsSubTab, setChartsSubTab] = useState("nutrition");
   const [chartsPeriod, setChartsPeriod] = useState("week");
 
   const [profile, setProfile] = useState({ name: "" });
-  const [goals, setGoals] = useState({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0 });
+  const [goals, setGoals] = useState({ calories: 2000, protein: 120, carbs: 220, fat: 65, targetWeight: 0 });
   const [logs, setLogs] = useState([]);
   const [weights, setWeights] = useState([]);
   const [exerciseLogs, setExerciseLogs] = useState([]);
   const [favorites, setFavorites] = useState([]);
-  const [waterLogs, setWaterLogs] = useState([]);
   const [editingEntry, setEditingEntry] = useState(null);
 
-  const loadAll = useCallback(async () => {
-    const [p, g, l, w, e, f, wa] = await Promise.all([
-      loadKey("profile", { name: "" }),
-      loadKey("goals", { calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0 }),
-      loadKey("meal-logs", []),
-      loadKey("weight-logs", []),
-      loadKey("exercise-logs", []),
-      loadKey("favorite-meals", []),
-      loadKey("water-logs", []),
-    ]);
-    setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setWaterLogs(wa); setReady(true);
+  useEffect(() => {
+    (async () => {
+      const [p, g, l, w, e, f] = await Promise.all([
+        loadKey("profile", { name: "" }),
+        loadKey("goals", { calories: 2000, protein: 120, carbs: 220, fat: 65, targetWeight: 0 }),
+        loadKey("meal-logs", []),
+        loadKey("weight-logs", []),
+        loadKey("exercise-logs", []),
+        loadKey("favorite-meals", []),
+      ]);
+      setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, targetWeight: 0, ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setReady(true);
+    })();
   }, []);
-
-  useEffect(() => { loadAll(); }, [loadAll]);
-
-  // ---------- Pull-to-refresh ----------
-  // Touch-driven, no external library: tracks a downward drag that only starts
-  // when the scroll container is already at the top, applies resistance, and
-  // reloads persisted data past the threshold.
-  const scrollRef = useRef(null);
-  const pullStartY = useRef(null);
-  const [pullDistance, setPullDistance] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
-  const PULL_THRESHOLD = 64;
-  const onPullTouchStart = (e) => {
-    pullStartY.current = scrollRef.current && scrollRef.current.scrollTop === 0 && !refreshing ? e.touches[0].clientY : null;
-  };
-  const onPullTouchMove = (e) => {
-    if (pullStartY.current == null) return;
-    const delta = e.touches[0].clientY - pullStartY.current;
-    if (delta > 0) setPullDistance(Math.min(delta * 0.45, 80));
-  };
-  const onPullTouchEnd = async () => {
-    if (pullStartY.current == null) return;
-    pullStartY.current = null;
-    if (pullDistance > PULL_THRESHOLD) {
-      setRefreshing(true);
-      haptic("light");
-      await loadAll();
-      setRefreshing(false);
-    }
-    setPullDistance(0);
-  };
 
   const todayLogs = useMemo(() => logs.filter((l) => l.date === todayStr()), [logs]);
   const todayTotals = useMemo(() => todayLogs.reduce((acc, l) => ({
     calories: acc.calories + num(l.calories), protein: acc.protein + num(l.protein_g),
-    carbs: acc.carbs + num(l.carbs_g), fat: acc.fat + num(l.fat_g), fiber: acc.fiber + num(l.fiber_g),
-  }), { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 }), [todayLogs]);
+    carbs: acc.carbs + num(l.carbs_g), fat: acc.fat + num(l.fat_g),
+  }), { calories: 0, protein: 0, carbs: 0, fat: 0 }), [todayLogs]);
 
   // Most-recently-eaten distinct meals (by name), for one-tap re-log alongside favorites.
   const recentMeals = useMemo(() => {
@@ -920,24 +608,13 @@ export default function MealTracker() {
 
   async function persistLogs(next) { setLogs(next); await saveKey("meal-logs", next); }
   async function persistWeights(next) { setWeights(next); await saveKey("weight-logs", next); }
-  async function persistWater(next) { setWaterLogs(next); await saveKey("water-logs", next); }
-  async function addWater(ml) {
-    haptic("light");
-    await persistWater([{ id: uid(), date: todayStr(), ml, timestamp: Date.now() }, ...waterLogs]);
-  }
-  async function removeLastWater() {
-    const idx = waterLogs.findIndex((w) => w.date === todayStr());
-    if (idx === -1) return;
-    haptic("light");
-    await persistWater(waterLogs.filter((_, i) => i !== idx));
-  }
   async function persistGoals(next) { setGoals(next); await saveKey("goals", next); }
   async function persistProfile(next) { setProfile(next); await saveKey("profile", next); }
   async function persistExercise(next) { setExerciseLogs(next); await saveKey("exercise-logs", next); }
   async function persistFavorites(next) { setFavorites(next); await saveKey("favorite-meals", next); }
 
-  async function deleteLog(id) { haptic("delete"); await persistLogs(logs.filter((l) => l.id !== id)); }
-  async function deleteExercise(id) { haptic("delete"); await persistExercise(exerciseLogs.filter((e) => e.id !== id)); }
+  async function deleteLog(id) { await persistLogs(logs.filter((l) => l.id !== id)); }
+  async function deleteExercise(id) { await persistExercise(exerciseLogs.filter((e) => e.id !== id)); }
 
   async function toggleFavorite(meal) {
     const key = (meal.food_name || "").trim().toLowerCase();
@@ -980,12 +657,6 @@ export default function MealTracker() {
   const weightProjection = useMemo(() => weightPace ? projectWeeksToGoal(weightPace.currentWeight, goals.targetWeight, weightPace.paceKgPerWeek) : null, [weightPace, goals.targetWeight]);
   const insights = useMemo(() => generateInsights(logs, exerciseLogs, goals), [logs, exerciseLogs, goals]);
   const periodSummary = useMemo(() => computePeriodSummary(logs, chartsPeriod === "week" ? 7 : 30), [logs, chartsPeriod]);
-  const todayWater = useMemo(() => waterLogs.filter((w) => w.date === todayStr()).reduce((s, w) => s + num(w.ml), 0), [waterLogs]);
-  const nutritionScore = useMemo(() => computeNutritionScore({ todayTotals, todayLogs, goals, waterMl: todayWater }), [todayTotals, todayLogs, goals, todayWater]);
-  const microSummary = useMemo(() => computeMicronutrientSummary(todayLogs, goals), [todayLogs, goals]);
-  const weeklyAchievement = useMemo(() => computeWeeklyAchievement(logs, goals), [logs, goals]);
-  const mealDates = useMemo(() => new Set(logs.map((l) => l.date)), [logs]);
-  const exerciseDates = useMemo(() => new Set(exerciseLogs.map((e) => e.date)), [exerciseLogs]);
 
   if (!ready) return <div className="flex items-center justify-center" style={{ height: 700, background: C.bgTop }}><Loader2 className="animate-spin" size={22} color={C.orange} /></div>;
 
@@ -996,15 +667,7 @@ export default function MealTracker() {
 
   return (
     <div className="flex flex-col relative" style={{ height: 700, maxHeight: "100vh", background: `linear-gradient(180deg, ${C.bgTop} 0%, ${C.bgBottom} 100%)`, overflow: "hidden" }}>
-            <div ref={scrollRef} onTouchStart={onPullTouchStart} onTouchMove={onPullTouchMove} onTouchEnd={onPullTouchEnd}
-              className="flex-1 overflow-y-auto px-4 pt-5" style={{ paddingBottom: 90 }}>
-
-              {(pullDistance > 0 || refreshing) && (
-                <div className="flex items-center justify-center" style={{ height: refreshing ? 40 : pullDistance, transition: refreshing ? "height .2s ease" : "none", overflow: "hidden" }}>
-                  <Loader2 size={18} color={C.orange} className={refreshing || pullDistance > PULL_THRESHOLD ? "animate-spin" : ""}
-                    style={{ transform: refreshing ? undefined : `rotate(${pullDistance * 3}deg)`, opacity: Math.min(1, pullDistance / PULL_THRESHOLD) }} />
-                </div>
-              )}
+            <div className="flex-1 overflow-y-auto px-4 pt-5" style={{ paddingBottom: 90 }}>
 
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
@@ -1049,44 +712,10 @@ export default function MealTracker() {
               </div>
             </div>
 
-            <div className="flex gap-2.5 mb-4">
-              <MacroPill icon={Dumbbell} iconBg={C.purpleTint} iconColor={C.purple} label="Protein" value={Math.round(todayTotals.protein)} unit="g" pct={goals.protein > 0 ? (todayTotals.protein / goals.protein) * 100 : 0} />
-              <MacroPill icon={Wheat} iconBg={C.tanTint} iconColor={C.tan} label="Carbs" value={Math.round(todayTotals.carbs)} unit="g" pct={goals.carbs > 0 ? (todayTotals.carbs / goals.carbs) * 100 : 0} />
-              <MacroPill icon={Droplet} iconBg={C.pinkTint} iconColor={C.pink} label="Fat" value={Math.round(todayTotals.fat)} unit="g" pct={goals.fat > 0 ? (todayTotals.fat / goals.fat) * 100 : 0} />
-            </div>
-
-            <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 22, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
-              <div className="flex items-center gap-3">
-                <div style={{ width: 46, height: 46, borderRadius: "50%", background: nutritionScore.total >= 80 ? C.greenTint : nutritionScore.total >= 55 ? C.tanTint : C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <Gauge size={20} color={nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="ft-display" style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>Today's Nutrition Score</span>
-                    <span className="ft-mono" style={{ fontSize: 14, fontWeight: 700, color: nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink }}>{nutritionScore.total}/100</span>
-                  </div>
-                  <div className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4, marginTop: 1 }}>{nutritionScore.summary}</div>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 22, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
-              <div className="flex items-center justify-between mb-2.5">
-                <div className="flex items-center gap-2">
-                  <Droplets size={16} color={C.blue} />
-                  <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Water</span>
-                </div>
-                <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>{(todayWater / 1000).toFixed(2).replace(/\.?0+$/, "") || 0}L / {(goals.water / 1000).toFixed(1)}L</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="flex-1 flex gap-1">
-                  {Array.from({ length: Math.max(1, Math.round(goals.water / 250)) }).map((_, i) => (
-                    <div key={i} style={{ flex: 1, height: 10, borderRadius: 4, background: i < Math.round(todayWater / 250) ? C.blue : C.track }} />
-                  ))}
-                </div>
-                <button onClick={removeLastWater} disabled={todayWater === 0} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.bgBottom, opacity: todayWater === 0 ? 0.4 : 1, flexShrink: 0 }}><Minus size={14} color={C.inkSoft} /></button>
-                <button onClick={() => addWater(250)} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.blueTint, flexShrink: 0 }}><Plus size={14} color={C.blue} /></button>
-              </div>
+            <div className="flex gap-2.5 mb-6">
+              <MacroPill icon={Dumbbell} iconBg={C.purpleTint} iconColor={C.purple} label="Protein" value={Math.round(todayTotals.protein)} unit="g" />
+              <MacroPill icon={Wheat} iconBg={C.tanTint} iconColor={C.tan} label="Carbs" value={Math.round(todayTotals.carbs)} unit="g" />
+              <MacroPill icon={Droplet} iconBg={C.pinkTint} iconColor={C.pink} label="Fat" value={Math.round(todayTotals.fat)} unit="g" />
             </div>
 
             <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Log your meal</div>
@@ -1128,55 +757,38 @@ export default function MealTracker() {
 
         {tab === "logs" && (
           <div>
-            <MiniCalendar mealDates={mealDates} exerciseDates={exerciseDates} selectedDate={logsDateFilter} onSelectDate={setLogsDateFilter} />
-            {logsDateFilter && (
-              <div className="flex items-center justify-between mb-3 px-1">
-                <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft }}>Showing {fmtDate(logsDateFilter)} only</span>
-                <button onClick={() => setLogsDateFilter(null)} className="ft-body" style={{ fontSize: 12, color: C.orange, fontWeight: 600 }}>Clear</button>
-              </div>
-            )}
             <div className="flex gap-2 mb-4">
               <Chip active={logsSubTab === "meals"} onClick={() => setLogsSubTab("meals")} label={`Meals (${logs.length})`} />
               <Chip active={logsSubTab === "exercise"} onClick={() => setLogsSubTab("exercise")} label={`Exercise (${exerciseLogs.length})`} />
             </div>
-            {logsSubTab === "meals" ? (() => {
-              const visibleMeals = logsDateFilter ? logs.filter((l) => l.date === logsDateFilter) : logs;
-              if (visibleMeals.length === 0) {
-                return <EmptyState icon={Utensils} text={logsDateFilter ? "No meals logged on this day." : "Nothing logged yet. Tap the orange + button to add your first meal."} />;
-              }
-              const renderMeal = (l) => (
-                <div className="flex items-center justify-between p-3.5" style={{ background: C.card, borderRadius: 18, boxShadow: "0 1px 4px rgba(20,20,20,0.05)", height: "100%", boxSizing: "border-box" }}>
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div style={{ width: 38, height: 38, borderRadius: "50%", background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Utensils size={15} color={C.orange} /></div>
-                    <div className="min-w-0">
-                      <div className="ft-body" style={{ fontSize: 14, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.food_name}</div>
-                      <div className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>{fmtDateTime(l.timestamp)} · {Math.round(l.calories)} kcal · P{Math.round(l.protein_g)} C{Math.round(l.carbs_g)} F{Math.round(l.fat_g)}</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-0.5 flex-shrink-0">
-                    <button onClick={() => toggleFavorite(l)} className="p-2" title="Favorite">
-                      <Star size={14} color={C.tan} fill={favorites.some((f) => (f.food_name || "").trim().toLowerCase() === (l.food_name || "").trim().toLowerCase()) ? C.tan : "none"} />
-                    </button>
-                    <button onClick={() => openEdit("meal", l)} className="p-2" title="Edit"><Pencil size={14} color={C.inkSoft} /></button>
-                    <button onClick={() => duplicateLog(l)} className="p-2" title="Duplicate"><Copy size={14} color={C.inkSoft} /></button>
-                    <button onClick={() => deleteLog(l.id)} className="p-2" title="Delete"><Trash2 size={14} color={C.pink} /></button>
-                  </div>
-                </div>
-              );
-              // Hundreds of entries render efficiently via windowing; short lists use
-              // the normal flow layout so they don't get boxed into a fixed height.
-              if (visibleMeals.length > VIRTUALIZE_THRESHOLD) {
-                return <VirtualList items={visibleMeals} itemHeight={66} gap={10} height={480} renderItem={renderMeal} />;
-              }
-              return <div className="flex flex-col gap-2.5">{visibleMeals.map((l) => <div key={l.id}>{renderMeal(l)}</div>)}</div>;
-            })() : (() => {
-              const visibleExercise = logsDateFilter ? exerciseLogs.filter((e) => e.date === logsDateFilter) : exerciseLogs;
-              if (visibleExercise.length === 0) {
-                return <EmptyState icon={Dumbbell} text={logsDateFilter ? "No workouts logged on this day." : "No workouts logged yet. Tap the orange + button and choose Exercise."} />;
-              }
-              return (
+            {logsSubTab === "meals" ? (
+              logs.length === 0 ? <EmptyState text="Nothing logged yet. Tap the orange + button to add your first meal." /> : (
                 <div className="flex flex-col gap-2.5">
-                  {visibleExercise.map((e) => {
+                  {logs.map((l) => (
+                    <div key={l.id} className="flex items-center justify-between p-3.5" style={{ background: C.card, borderRadius: 18, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div style={{ width: 38, height: 38, borderRadius: "50%", background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Utensils size={15} color={C.orange} /></div>
+                        <div className="min-w-0">
+                          <div className="ft-body" style={{ fontSize: 14, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.food_name}</div>
+                          <div className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>{fmtDateTime(l.timestamp)} · {Math.round(l.calories)} kcal · P{Math.round(l.protein_g)} C{Math.round(l.carbs_g)} F{Math.round(l.fat_g)}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-0.5 flex-shrink-0">
+                        <button onClick={() => toggleFavorite(l)} className="p-2" title="Favorite">
+                          <Star size={14} color={C.tan} fill={favorites.some((f) => (f.food_name || "").trim().toLowerCase() === (l.food_name || "").trim().toLowerCase()) ? C.tan : "none"} />
+                        </button>
+                        <button onClick={() => openEdit("meal", l)} className="p-2" title="Edit"><Pencil size={14} color={C.inkSoft} /></button>
+                        <button onClick={() => duplicateLog(l)} className="p-2" title="Duplicate"><Copy size={14} color={C.inkSoft} /></button>
+                        <button onClick={() => deleteLog(l.id)} className="p-2" title="Delete"><Trash2 size={14} color={C.pink} /></button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : (
+              exerciseLogs.length === 0 ? <EmptyState text="No workouts logged yet. Tap the orange + button and choose Exercise." /> : (
+                <div className="flex flex-col gap-2.5">
+                  {exerciseLogs.map((e) => {
                     const volume = e.type === "strength" ? e.sets.reduce((s, x) => s + num(x.weight) * num(x.reps), 0) : 0;
                     return (
                       <div key={e.id} className="p-3.5" style={{ background: C.card, borderRadius: 18, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
@@ -1211,8 +823,8 @@ export default function MealTracker() {
                     );
                   })}
                 </div>
-              );
-            })()}
+              )
+            )}
           </div>
         )}
 
@@ -1300,26 +912,6 @@ export default function MealTracker() {
                     </>
                   )}
                 </div>
-
-                <div className="p-4 mt-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
-                  <div className="ft-body mb-3" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Micronutrients today</div>
-                  {todayLogs.length === 0 ? <EmptyState text="Log a meal to see today's micronutrient breakdown." compact /> : (
-                    <div className="flex flex-col gap-2.5">
-                      {microSummary.map((m) => (
-                        <div key={m.key}>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="ft-body" style={{ fontSize: 12, color: C.ink, fontWeight: 500 }}>{m.label}</span>
-                            <span className="ft-mono" style={{ fontSize: 11.5, color: C.inkSoft }}>{m.value}{m.unit}</span>
-                          </div>
-                          <div style={{ height: 6, borderRadius: 3, background: C.track, overflow: "hidden" }}>
-                            <div style={{ height: "100%", width: `${clamp(m.pct, 0, 100)}%`, background: m.capIsLimit && m.pct > 100 ? C.pink : m.color, borderRadius: 3, transition: "width .4s ease" }} />
-                          </div>
-                        </div>
-                      ))}
-                      <div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft, marginTop: 2 }}>Calcium, iron, B12, vitamin D & potassium are estimated from the AI's per-meal %DV values.</div>
-                    </div>
-                  )}
-                </div>
               </>
             ) : chartsSubTab === "exercise" ? (
               <>
@@ -1380,7 +972,7 @@ export default function MealTracker() {
                     <div className="ft-mono" style={{ fontSize: 16, fontWeight: 700, color: C.pink }}>{periodSummary.avgFat}g</div>
                   </div>
                 </div>
-                <div className="flex gap-2.5 mb-4">
+                <div className="flex gap-2.5">
                   <div className="flex-1 flex items-center gap-2.5 p-3.5" style={{ background: C.card, borderRadius: 18 }}>
                     <div style={{ width: 34, height: 34, borderRadius: 10, background: C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Trophy size={16} color={C.pink} /></div>
                     <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{streak}</div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>current streak</div></div>
@@ -1388,24 +980,6 @@ export default function MealTracker() {
                   <div className="flex-1 flex items-center gap-2.5 p-3.5" style={{ background: C.card, borderRadius: 18 }}>
                     <div style={{ width: 34, height: 34, borderRadius: 10, background: C.tanTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Trophy size={16} color={C.tan} /></div>
                     <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{bestStreak}</div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>best streak</div></div>
-                  </div>
-                </div>
-
-                <div className="p-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
-                  <div className="ft-body mb-3" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Weekly goal achievement</div>
-                  <div className="mb-3.5">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="ft-body" style={{ fontSize: 12, color: C.ink }}>Calories goal achieved</span>
-                      <span className="ft-mono" style={{ fontSize: 12, fontWeight: 700, color: C.orange }}>{weeklyAchievement.caloriesAchieved}/{weeklyAchievement.totalDays} days</span>
-                    </div>
-                    <AchievementBar perDay={weeklyAchievement.perDay} hitKey="calHit" />
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="ft-body" style={{ fontSize: 12, color: C.ink }}>Protein goal achieved</span>
-                      <span className="ft-mono" style={{ fontSize: 12, fontWeight: 700, color: C.purple }}>{weeklyAchievement.proteinAchieved}/{weeklyAchievement.totalDays} days</span>
-                    </div>
-                    <AchievementBar perDay={weeklyAchievement.perDay} hitKey="proteinHit" />
                   </div>
                 </div>
               </>
@@ -1425,16 +999,14 @@ export default function MealTracker() {
         timestamp: Date.now(),
         weight: w,
       };
-      haptic("success");
       await persistWeights([
         entry,
         ...weights.filter((x) => x.date !== todayStr()),
       ]);
     }}
-    onDeleteWeight={async (id) => {
-      haptic("delete");
-      await persistWeights(weights.filter((w) => w.id !== id));
-    }}
+    onDeleteWeight={async (id) =>
+      persistWeights(weights.filter((w) => w.id !== id))
+    }
     darkMode={darkMode}
     setDarkMode={setDarkMode}
   />
@@ -1442,11 +1014,7 @@ export default function MealTracker() {
 
       </div>
 
-      <div className="absolute left-4 right-4 flex items-center" style={{
-        background: C.card, borderRadius: 30, height: 64,
-        bottom: "calc(10px + env(safe-area-inset-bottom, 0px))",
-        boxShadow: "0 10px 30px rgba(20,20,20,0.16), 0 2px 8px rgba(20,20,20,0.07)",
-      }}>
+      <div className="absolute left-4 right-4 bottom-4 flex items-center" style={{ background: C.card, borderRadius: 30, boxShadow: "0 6px 20px rgba(20,20,20,0.14)", height: 64 }}>
         <NavBtn active={tab === "home"} onClick={() => setTab("home")} icon={Home} label="Home" />
         <NavBtn active={tab === "logs"} onClick={() => setTab("logs")} icon={ClipboardList} label="Logs" />
         <div style={{ width: 60 }} />
@@ -1454,14 +1022,8 @@ export default function MealTracker() {
         <NavBtn active={tab === "profile"} onClick={() => setTab("profile")} icon={User} label="Profile" />
       </div>
       <button onClick={() => openAdd("meal", "photo")} className="absolute flex items-center justify-center"
-        style={{
-          left: "50%", transform: "translateX(-50%)",
-          bottom: "calc(46px + env(safe-area-inset-bottom, 0px))",
-          width: 52, height: 52, borderRadius: "50%",
-          background: `linear-gradient(135deg, ${C.orange}, ${C.orangeDeep})`,
-          boxShadow: "0 8px 18px rgba(238,108,55,0.4), 0 2px 6px rgba(238,108,55,0.3)",
-        }}>
-        <Plus size={24} color="#fff" strokeWidth={2.4} />
+        style={{ left: "50%", transform: "translateX(-50%)", bottom: 46, width: 58, height: 58, borderRadius: "50%", background: `linear-gradient(135deg, ${C.orange}, ${C.orangeDeep})`, boxShadow: "0 6px 16px rgba(238,108,55,0.45)" }}>
+        <Plus size={26} color="#fff" strokeWidth={2.4} />
       </button>
 
       {showAdd && (
@@ -1474,14 +1036,12 @@ export default function MealTracker() {
             const exists = logs.some((l) => l.id === entry.id);
             const next = exists ? logs.map((l) => (l.id === entry.id ? entry : l)) : [entry, ...logs];
             await persistLogs(next);
-            haptic("success");
             setShowAdd(false); setEditingEntry(null);
           }}
           onSaveExercise={async (entry) => {
             const exists = exerciseLogs.some((x) => x.id === entry.id);
             const next = exists ? exerciseLogs.map((x) => (x.id === entry.id ? entry : x)) : [entry, ...exerciseLogs];
             await persistExercise(next);
-            haptic("success");
             setShowAdd(false); setEditingEntry(null);
           }}
         />
@@ -1543,23 +1103,13 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     return initialMode === "manual" ? { ...EMPTY_MEAL } : null;
   });
   const [photoInputId] = useState(() => "meal-photo-" + uid());
-  const [compressing, setCompressing] = useState(false);
 
   async function handleImagePick(e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    setError(null); setPending(null); setCompressing(true);
-    try {
-      const { b64, mediaType } = await compressImageFile(file);
-      setImagePreview({ b64, mediaType });
-    } catch {
-      // Compression failed (unsupported format, canvas error, etc.) — fall back
-      // to sending the original file uncompressed rather than blocking the log.
-      const b64 = await fileToBase64(file);
-      setImagePreview({ b64, mediaType: file.type || "image/jpeg" });
-    } finally {
-      setCompressing(false);
-    }
+    setError(null); setPending(null);
+    const b64 = await fileToBase64(file);
+    setImagePreview({ b64, mediaType: file.type || "image/jpeg" });
   }
 
   async function analyze() {
@@ -1667,11 +1217,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
           {mode === "photo" ? (
             <div className="mb-3">
               <input id={photoInputId} type="file" accept="image/*" capture="environment" onChange={handleImagePick} className="hidden" />
-              {compressing ? (
-                <div className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-2xl" style={{ border: `2px dashed ${C.track}`, background: C.card }}>
-                  <Loader2 size={22} color={C.orange} className="animate-spin" /><span className="ft-body" style={{ fontSize: 13, color: C.inkSoft }}>Optimizing photo…</span>
-                </div>
-              ) : imagePreview ? (
+              {imagePreview ? (
                 <div className="relative">
                   <img src={`data:${imagePreview.mediaType};base64,${imagePreview.b64}`} alt="Meal preview" style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 16 }} />
                   <button onClick={() => setImagePreview(null)} className="absolute top-2 right-2 p-1.5 rounded-full" style={{ background: "rgba(21,23,27,0.7)" }}><X size={14} color="#fff" /></button>
@@ -1687,10 +1233,9 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
               className="w-full p-3 rounded-2xl ft-body mb-3" style={{ border: "none", background: C.card, color: C.ink, fontSize: 14, minHeight: 90, resize: "none", outline: "none" }} />
           )}
           {error && (<div className="flex items-start gap-2 p-2.5 mb-3 rounded-xl" style={{ background: C.pinkTint }}><AlertCircle size={15} color={C.pink} style={{ flexShrink: 0, marginTop: 1 }} /><span className="ft-body" style={{ fontSize: 12, color: C.pink }}>{error}</span></div>)}
-          <button onClick={analyze} disabled={analyzing || compressing} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 14, fontWeight: 600, opacity: analyzing ? 0.7 : 1 }}>
+          <button onClick={analyze} disabled={analyzing} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 14, fontWeight: 600, opacity: analyzing ? 0.7 : 1 }}>
             {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Utensils size={16} />}{analyzing ? "Analyzing meal…" : "Analyze meal"}
           </button>
-          {analyzing && <NutritionSkeleton />}
           <button onClick={() => setPending({ ...EMPTY_MEAL })}
             className="w-full flex items-center justify-center py-2.5 mt-2 ft-body" style={{ color: C.inkSoft, fontSize: 12.5, fontWeight: 500 }}>Skip — enter nutrition manually</button>
         </>
@@ -1965,9 +1510,9 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
     </div>
 
       <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Daily goals</div>
-      {field("calories", "Calories", "kcal")}{field("protein", "Protein", "g")}{field("carbs", "Carbohydrates", "g")}{field("fat", "Fat", "g")}{field("fiber", "Fiber", "g")}{field("water", "Water", "ml")}
+      {field("calories", "Calories", "kcal")}{field("protein", "Protein", "g")}{field("carbs", "Carbohydrates", "g")}{field("fat", "Fat", "g")}
       {field("targetWeight", "Goal weight", "kg (0 = off)")}
-      <button onClick={async () => { await onSaveGoals(local); haptic("success"); setSaved(true); }} className="w-full flex items-center justify-center gap-2 py-3 rounded-full ft-body mb-6"
+      <button onClick={async () => { await onSaveGoals(local); setSaved(true); }} className="w-full flex items-center justify-center gap-2 py-3 rounded-full ft-body mb-6"
         style={{ background: saved ? C.track : C.orange, color: saved ? C.ink : "#fff", fontSize: 14, fontWeight: 600 }}>{saved ? <><Check size={16} /> Saved</> : "Save goals"}</button>
 
       <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Weight</div>
