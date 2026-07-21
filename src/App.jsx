@@ -4,7 +4,8 @@ import {
   Camera, Type, Utensils, ClipboardList, BarChart3, User, Plus,
   Trash2, Loader2, TrendingUp, TrendingDown, Minus, X, Check,
   Flame, Trophy, Dumbbell, Wheat, Droplet, AlertCircle, Home, Activity, Sparkles,
-  Star, Pencil, Copy, Droplets, ChevronLeft, ChevronRight, CalendarDays, Gauge
+  Star, Pencil, Copy, Droplets, ChevronLeft, ChevronRight, CalendarDays, Gauge,
+  Bell, Award, Layers, Brain, Lightbulb
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis,
@@ -61,6 +62,22 @@ const DARK = {
 };
 
 let C = LIGHT;
+
+// ---------- Default workout split ----------
+// A starting Push/Pull/Legs/Shoulders template — fully editable per day. Each day
+// is just a name + an ordered list of planned exercise names; nothing forces a
+// day's exercises to actually get logged (unlogged ones are simply left empty).
+const DEFAULT_SPLITS = [
+  {
+    id: "default-ppl", name: "Push Pull Legs",
+    days: [
+      { id: "d1", label: "Push", exercises: ["Bench press", "Overhead press", "Incline dumbbell press", "Tricep pushdown"] },
+      { id: "d2", label: "Pull", exercises: ["Deadlift", "Pull-ups", "Barbell row", "Bicep curl"] },
+      { id: "d3", label: "Legs", exercises: ["Squat", "Leg press", "Romanian deadlift", "Calf raise"] },
+      { id: "d4", label: "Shoulders", exercises: ["Overhead press", "Lateral raise", "Face pull", "Shrugs"] },
+    ],
+  },
+];
 
 
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -528,6 +545,103 @@ Respond with ONLY valid JSON, no markdown fences, no commentary, in exactly this
 Make progression_suggestion concrete and numeric where possible (a specific weight/rep or pace target for next session). Keep form_tip to one practical cue. Use "new" for trend only if there is no prior history.`;
 }
 
+// ---------- AI Daily Coach ----------
+function buildDailyCoachPrompt({ todayTotals, todayLogs, exerciseLogs, goals }) {
+  const mealsText = todayLogs.length
+    ? todayLogs.map((l) => `- ${l.food_name} (${Math.round(l.calories)} kcal, P${Math.round(l.protein_g)} C${Math.round(l.carbs_g)} F${Math.round(l.fat_g)}, fiber ${Math.round(l.fiber_g)}g)`).join("\n")
+    : "No meals logged today.";
+  const workoutsText = exerciseLogs.length
+    ? exerciseLogs.map((e) => e.type === "strength" ? `- ${e.name}: ${e.sets.length} sets` : `- ${e.name}: ${e.duration_min}min cardio`).join("\n")
+    : "No workouts logged today.";
+  return `You are a supportive, practical daily nutrition and fitness coach embedded in a tracking app. Review this person's full day and give a short end-of-day recap.
+
+Today's goals: ${goals.calories} kcal, ${goals.protein}g protein, ${goals.carbs}g carbs, ${goals.fat}g fat, ${goals.fiber || 28}g fiber.
+Today's totals: ${Math.round(todayTotals.calories)} kcal, ${Math.round(todayTotals.protein)}g protein, ${Math.round(todayTotals.carbs)}g carbs, ${Math.round(todayTotals.fat)}g fat, ${Math.round(todayTotals.fiber || 0)}g fiber.
+
+Meals logged today:
+${mealsText}
+
+Workouts logged today:
+${workoutsText}
+
+Respond with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:
+{
+  "summary": string,
+  "suggestions": [string, string, string]
+}
+"summary" is one or two sentences recapping how the day went against goals (e.g. percentages reached, what stood out) — plain, encouraging, not clinical. "suggestions" is an array of exactly 2-3 short, concrete, actionable tips for tomorrow (each under ~20 words). Base everything only on the data given; don't invent details.`;
+}
+
+// ---------- Personal records & progressive overload ----------
+// Estimated 1-rep-max via the Epley formula — used to compare sets of different
+// weight/rep combinations on a like-for-like basis.
+function estimate1RM(weight, reps) { return reps > 0 ? weight * (1 + reps / 30) : 0; }
+
+// Best set per strength exercise across all history: heaviest estimated 1RM, plus
+// the raw weight/reps/date that produced it.
+function computePersonalRecords(exerciseLogs) {
+  const records = {};
+  exerciseLogs.filter((e) => e.type === "strength").forEach((e) => {
+    const key = e.name.trim().toLowerCase();
+    (e.sets || []).forEach((s) => {
+      const oneRm = estimate1RM(num(s.weight), num(s.reps));
+      if (oneRm <= 0) return;
+      if (!records[key] || oneRm > records[key].oneRm) {
+        records[key] = { name: e.name, oneRm, weight: num(s.weight), reps: num(s.reps), date: e.date };
+      }
+    });
+  });
+  return records;
+}
+
+// Compares a freshly-saved strength entry's best set against the previous PR
+// (computed from history that excludes this entry) — returns a delta badge
+// descriptor, or null for cardio / first-time exercises.
+function computeProgressiveOverload(entry, priorExerciseLogs) {
+  if (entry.type !== "strength" || !entry.sets || !entry.sets.length) return null;
+  const bestNow = entry.sets.reduce((best, s) => {
+    const oneRm = estimate1RM(num(s.weight), num(s.reps));
+    return oneRm > best.oneRm ? { oneRm, weight: num(s.weight), reps: num(s.reps) } : best;
+  }, { oneRm: 0, weight: 0, reps: 0 });
+  const priorRecords = computePersonalRecords(priorExerciseLogs);
+  const prior = priorRecords[entry.name.trim().toLowerCase()];
+  if (!prior) return { isNew: true, isPR: bestNow.oneRm > 0 };
+  const isPR = bestNow.oneRm > prior.oneRm + 0.01;
+  const deltaWeight = bestNow.weight - prior.weight;
+  return { isNew: false, isPR, deltaWeight, priorWeight: prior.weight, priorReps: prior.reps };
+}
+
+// ---------- Smart notifications ----------
+// Contextual, time-aware nudges computed purely from current state — no backend
+// or push infrastructure required, just re-derived on every render.
+function computeSmartNotifications({ todayTotals, todayLogs, goals, todayWater, now }) {
+  const hour = now.getHours();
+  const notifications = [];
+
+  const proteinGap = goals.protein - todayTotals.protein;
+  if (proteinGap > 5 && proteinGap <= 35 && hour >= 14) {
+    notifications.push({ id: "protein-gap", icon: Dumbbell, color: C.purple, bg: C.purpleTint, text: `You're only ${Math.round(proteinGap)}g short of your protein goal.` });
+  }
+
+  const hasLunch = todayLogs.some((l) => { const h = new Date(l.timestamp).getHours(); return h >= 11 && h < 15; });
+  if (!hasLunch && hour >= 14 && hour < 17) {
+    notifications.push({ id: "no-lunch", icon: Utensils, color: C.orange, bg: C.orangeTint, text: "You haven't logged lunch yet." });
+  }
+
+  const waterGoal = goals.water || 2000;
+  const expectedWaterByNow = waterGoal * clamp((hour - 7) / 14, 0, 1); // rough pace from 7am to 9pm
+  if (hour >= 10 && hour <= 21 && todayWater < expectedWaterByNow - 400) {
+    notifications.push({ id: "water", icon: Droplets, color: C.blue, bg: C.blueTint, text: "Time to drink water — you're behind your usual pace today." });
+  }
+
+  const expectedCaloriesByNow = goals.calories * clamp((hour - 7) / 13, 0, 1); // rough pace from 7am to 8pm
+  if (hour >= 13 && todayTotals.calories < expectedCaloriesByNow - 400) {
+    notifications.push({ id: "low-calories", icon: Flame, color: C.pink, bg: C.pinkTint, text: "Your calorie intake is low today." });
+  }
+
+  return notifications;
+}
+
 // ---------- Ring ----------
 function Ring({ size, stroke, pct, trackColor, fillColor, children }) {
   const [animatedPct, setAnimatedPct] = useState(0);
@@ -823,10 +937,12 @@ export default function MealTracker() {
   const [exerciseLogs, setExerciseLogs] = useState([]);
   const [favorites, setFavorites] = useState([]);
   const [waterLogs, setWaterLogs] = useState([]);
+  const [splits, setSplits] = useState([]);
+  const [dailyCoach, setDailyCoach] = useState(null); // { date, summary, suggestions }
   const [editingEntry, setEditingEntry] = useState(null);
 
   const loadAll = useCallback(async () => {
-    const [p, g, l, w, e, f, wa] = await Promise.all([
+    const [p, g, l, w, e, f, wa, sp, dc] = await Promise.all([
       loadKey("profile", { name: "" }),
       loadKey("goals", { calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0 }),
       loadKey("meal-logs", []),
@@ -834,8 +950,10 @@ export default function MealTracker() {
       loadKey("exercise-logs", []),
       loadKey("favorite-meals", []),
       loadKey("water-logs", []),
+      loadKey("workout-splits", DEFAULT_SPLITS),
+      loadKey("daily-coach", null),
     ]);
-    setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setWaterLogs(wa); setReady(true);
+    setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setWaterLogs(wa); setSplits(sp); setDailyCoach(dc); setReady(true);
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
@@ -870,6 +988,7 @@ export default function MealTracker() {
   };
 
   const todayLogs = useMemo(() => logs.filter((l) => l.date === todayStr()), [logs]);
+  const todayExerciseLogs = useMemo(() => exerciseLogs.filter((e) => e.date === todayStr()), [exerciseLogs]);
   const todayTotals = useMemo(() => todayLogs.reduce((acc, l) => ({
     calories: acc.calories + num(l.calories), protein: acc.protein + num(l.protein_g),
     carbs: acc.carbs + num(l.carbs_g), fat: acc.fat + num(l.fat_g), fiber: acc.fiber + num(l.fiber_g),
@@ -934,6 +1053,8 @@ export default function MealTracker() {
   async function persistGoals(next) { setGoals(next); await saveKey("goals", next); }
   async function persistProfile(next) { setProfile(next); await saveKey("profile", next); }
   async function persistExercise(next) { setExerciseLogs(next); await saveKey("exercise-logs", next); }
+  async function persistSplits(next) { setSplits(next); await saveKey("workout-splits", next); }
+  async function persistDailyCoach(next) { setDailyCoach(next); await saveKey("daily-coach", next); }
   async function persistFavorites(next) { setFavorites(next); await saveKey("favorite-meals", next); }
 
   async function deleteLog(id) { haptic("delete"); await persistLogs(logs.filter((l) => l.id !== id)); }
@@ -986,6 +1107,46 @@ export default function MealTracker() {
   const weeklyAchievement = useMemo(() => computeWeeklyAchievement(logs, goals), [logs, goals]);
   const mealDates = useMemo(() => new Set(logs.map((l) => l.date)), [logs]);
   const exerciseDates = useMemo(() => new Set(exerciseLogs.map((e) => e.date)), [exerciseLogs]);
+  const personalRecords = useMemo(() => computePersonalRecords(exerciseLogs), [exerciseLogs]);
+
+  // ---------- Smart notifications ----------
+  const [dismissedNotifications, setDismissedNotifications] = useState([]);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [nowTick, setNowTick] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(new Date()), 5 * 60 * 1000); // refresh pacing every 5min
+    return () => clearInterval(id);
+  }, []);
+  const smartNotifications = useMemo(
+    () => computeSmartNotifications({ todayTotals, todayLogs, goals, todayWater, now: nowTick }).filter((n) => !dismissedNotifications.includes(n.id)),
+    [todayTotals, todayLogs, goals, todayWater, nowTick, dismissedNotifications]
+  );
+
+  // ---------- AI Daily Coach ----------
+  const [coachLoading, setCoachLoading] = useState(false);
+  const [coachError, setCoachError] = useState(null);
+  async function generateDailyCoach() {
+    setCoachLoading(true); setCoachError(null);
+    try {
+      const promptText = buildDailyCoachPrompt({ todayTotals, todayLogs, exerciseLogs: todayExerciseLogs, goals });
+      const raw = await callGemini([{ type: "text", text: promptText }]);
+      const parsed = parseJSON(raw);
+      const next = { date: todayStr(), summary: parsed.summary || "", suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.slice(0, 3) : [], generatedAt: Date.now() };
+      await persistDailyCoach(next);
+    } catch (e) {
+      setCoachError(e && e.message ? e.message : "Couldn't generate today's coach summary.");
+    } finally { setCoachLoading(false); }
+  }
+  // Auto-generate once per day, in the evening, once there's at least one meal
+  // logged and we haven't already generated today's summary.
+  useEffect(() => {
+    if (!ready) return;
+    const hour = nowTick.getHours();
+    if (hour >= 20 && todayLogs.length > 0 && (!dailyCoach || dailyCoach.date !== todayStr()) && !coachLoading) {
+      generateDailyCoach();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, nowTick, todayLogs.length, dailyCoach]);
 
   if (!ready) return <div className="flex items-center justify-center" style={{ height: 700, background: C.bgTop }}><Loader2 className="animate-spin" size={22} color={C.orange} /></div>;
 
@@ -1006,7 +1167,7 @@ export default function MealTracker() {
                 </div>
               )}
 
-        <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center justify-between mb-5" style={{ position: "relative" }}>
           <div className="flex items-center gap-3">
             <Avatar initial={initial} />
             <div>
@@ -1019,7 +1180,36 @@ export default function MealTracker() {
               )}
             </div>
           </div>
-          <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>Nourish</span>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setNotifOpen((o) => !o)} className="relative flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: "50%", background: C.card }}>
+              <Bell size={17} color={C.ink} />
+              {smartNotifications.length > 0 && (
+                <div style={{ position: "absolute", top: 6, right: 7, width: 8, height: 8, borderRadius: "50%", background: C.pink, border: `1.5px solid ${C.card}` }} />
+              )}
+            </button>
+            <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>Nourish</span>
+          </div>
+          {notifOpen && (
+            <div className="absolute" style={{ top: 44, right: 0, width: 280, zIndex: 40, background: C.card, borderRadius: 18, boxShadow: "0 10px 30px rgba(20,20,20,0.2)", padding: 12 }}>
+              <div className="flex items-center justify-between mb-2 px-1">
+                <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>Notifications</span>
+                <button onClick={() => setNotifOpen(false)}><X size={15} color={C.inkSoft} /></button>
+              </div>
+              {smartNotifications.length === 0 ? (
+                <div className="py-4 text-center ft-body" style={{ fontSize: 12, color: C.inkSoft }}>You're all caught up.</div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {smartNotifications.map((n) => (
+                    <div key={n.id} className="flex items-start gap-2 p-2.5" style={{ background: n.bg, borderRadius: 14 }}>
+                      <n.icon size={14} color={n.color} style={{ flexShrink: 0, marginTop: 1 }} />
+                      <span className="ft-body flex-1" style={{ fontSize: 12, color: C.ink, lineHeight: 1.35 }}>{n.text}</span>
+                      <button onClick={() => setDismissedNotifications((d) => [...d, n.id])} style={{ flexShrink: 0 }}><X size={12} color={C.inkSoft} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {tab === "home" && (
@@ -1087,6 +1277,45 @@ export default function MealTracker() {
                 <button onClick={removeLastWater} disabled={todayWater === 0} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.bgBottom, opacity: todayWater === 0 ? 0.4 : 1, flexShrink: 0 }}><Minus size={14} color={C.inkSoft} /></button>
                 <button onClick={() => addWater(250)} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.blueTint, flexShrink: 0 }}><Plus size={14} color={C.blue} /></button>
               </div>
+            </div>
+
+            <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 22, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+              <div className="flex items-center gap-2 mb-2.5">
+                <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.purpleTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <Brain size={15} color={C.purple} />
+                </div>
+                <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>AI Daily Coach</span>
+              </div>
+              {coachLoading ? (
+                <div className="flex items-center gap-2 py-2">
+                  <Loader2 size={14} className="animate-spin" color={C.purple} />
+                  <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Reviewing today's log…</span>
+                </div>
+              ) : dailyCoach && dailyCoach.date === todayStr() ? (
+                <>
+                  <div className="ft-body mb-3" style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.45 }}>{dailyCoach.summary}</div>
+                  <div className="flex flex-col gap-2 mb-2">
+                    {dailyCoach.suggestions.map((s, i) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <Lightbulb size={13} color={C.tan} style={{ flexShrink: 0, marginTop: 2 }} />
+                        <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4 }}>{s}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={generateDailyCoach} className="ft-body" style={{ fontSize: 11.5, color: C.purple, fontWeight: 600 }}>Refresh</button>
+                </>
+              ) : (
+                <>
+                  <div className="ft-body mb-3" style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.4 }}>
+                    {todayLogs.length === 0 ? "Log a meal today and check back for your evening recap." : "Get a quick recap of today's nutrition with tips for tomorrow."}
+                  </div>
+                  <button onClick={generateDailyCoach} disabled={todayLogs.length === 0} className="flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full ft-body"
+                    style={{ background: C.ink, color: C.onInk, fontSize: 12, fontWeight: 600, opacity: todayLogs.length === 0 ? 0.5 : 1 }}>
+                    <Sparkles size={13} />Get today's recap
+                  </button>
+                </>
+              )}
+              {coachError && <div className="ft-body mt-2" style={{ fontSize: 11.5, color: C.pink }}>{coachError}</div>}
             </div>
 
             <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Log your meal</div>
@@ -1176,8 +1405,25 @@ export default function MealTracker() {
               }
               return (
                 <div className="flex flex-col gap-2.5">
+                  {!logsDateFilter && Object.keys(personalRecords).length > 0 && (
+                    <div className="p-3.5 mb-1" style={{ background: C.card, borderRadius: 18, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                      <div className="flex items-center gap-1.5 mb-2.5">
+                        <Award size={14} color={C.tan} />
+                        <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Personal records</span>
+                      </div>
+                      <div className="flex gap-2" style={{ overflowX: "auto" }}>
+                        {Object.values(personalRecords).map((r) => (
+                          <div key={r.name} className="flex-shrink-0 px-3 py-2" style={{ background: C.tanTint, borderRadius: 14, minWidth: 110 }}>
+                            <div className="ft-body" style={{ fontSize: 11, color: C.ink, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 130 }}>{r.name}</div>
+                            <div className="ft-mono" style={{ fontSize: 13, fontWeight: 700, color: C.tan }}>{r.weight}kg × {r.reps}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {visibleExercise.map((e) => {
                     const volume = e.type === "strength" ? e.sets.reduce((s, x) => s + num(x.weight) * num(x.reps), 0) : 0;
+                    const overload = computeProgressiveOverload(e, exerciseLogs.filter((x) => x.timestamp < e.timestamp));
                     return (
                       <div key={e.id} className="p-3.5" style={{ background: C.card, borderRadius: 18, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                         <div className="flex items-center justify-between">
@@ -1190,6 +1436,17 @@ export default function MealTracker() {
                               <div className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>
                                 {fmtDateTime(e.timestamp)} · {e.type === "strength" ? `${e.sets.length} sets · ${Math.round(volume)} kg volume` : `${e.duration_min}min · ${e.distance_km}km`}
                               </div>
+                              {overload && overload.isPR && (
+                                <div className="flex items-center gap-1 mt-1"><Award size={11} color={C.tan} /><span className="ft-body" style={{ fontSize: 10.5, color: C.tan, fontWeight: 700 }}>New PR</span></div>
+                              )}
+                              {overload && !overload.isPR && !overload.isNew && overload.deltaWeight !== 0 && (
+                                <div className="flex items-center gap-1 mt-1">
+                                  {overload.deltaWeight > 0 ? <TrendingUp size={11} color={C.green} /> : <TrendingDown size={11} color={C.pink} />}
+                                  <span className="ft-body" style={{ fontSize: 10.5, color: overload.deltaWeight > 0 ? C.green : C.pink, fontWeight: 600 }}>
+                                    {overload.deltaWeight > 0 ? "+" : ""}{Math.round(overload.deltaWeight * 10) / 10}kg top set vs last time
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           </div>
                           <div className="flex items-center gap-0.5 flex-shrink-0">
@@ -1437,6 +1694,8 @@ export default function MealTracker() {
     }}
     darkMode={darkMode}
     setDarkMode={setDarkMode}
+    splits={splits}
+    onSaveSplits={persistSplits}
   />
 )}
 
@@ -1467,7 +1726,7 @@ export default function MealTracker() {
       {showAdd && (
         <AddLogSheet
           initialLogType={addLogType} initialMode={addMode} goals={goals} todayTotals={todayTotals} todayLogs={todayLogs} exerciseLogs={exerciseLogs}
-          favorites={favorites} recentMeals={recentMeals} onToggleFavorite={toggleFavorite}
+          favorites={favorites} recentMeals={recentMeals} onToggleFavorite={toggleFavorite} splits={splits}
           editingEntry={editingEntry}
           onClose={() => { setShowAdd(false); setEditingEntry(null); }}
           onSaveMeal={async (entry) => {
@@ -1491,7 +1750,7 @@ export default function MealTracker() {
 }
 
 // ---------- Add Log Sheet (Meal or Exercise) ----------
-function AddLogSheet({ initialLogType, initialMode, goals, todayTotals, todayLogs, exerciseLogs, favorites, recentMeals, onToggleFavorite, editingEntry, onClose, onSaveMeal, onSaveExercise }) {
+function AddLogSheet({ initialLogType, initialMode, goals, todayTotals, todayLogs, exerciseLogs, favorites, recentMeals, onToggleFavorite, splits, editingEntry, onClose, onSaveMeal, onSaveExercise }) {
   const [logType, setLogType] = useState(initialLogType);
   const isEditing = !!editingEntry;
 
@@ -1521,7 +1780,7 @@ function AddLogSheet({ initialLogType, initialMode, goals, todayTotals, todayLog
             ? <MealForm initialMode={initialMode} goals={goals} todayTotals={todayTotals} todayLogs={todayLogs} onSave={onSaveMeal}
                 favorites={favorites} recentMeals={recentMeals} onToggleFavorite={onToggleFavorite}
                 editingEntry={isEditing && editingEntry.type === "meal" ? editingEntry.entry : null} />
-            : <ExerciseForm exerciseLogs={exerciseLogs} onSave={onSaveExercise}
+            : <ExerciseForm exerciseLogs={exerciseLogs} onSave={onSaveExercise} splits={splits}
                 editingEntry={isEditing && editingEntry.type === "exercise" ? editingEntry.entry : null} />}
         </div>
       </div>
@@ -1780,9 +2039,12 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   );
 }
 
-function ExerciseForm({ exerciseLogs, onSave, editingEntry }) {
+function ExerciseForm({ exerciseLogs, onSave, editingEntry, splits }) {
   const [exType, setExType] = useState(editingEntry ? editingEntry.type : "strength");
   const [name, setName] = useState(editingEntry ? editingEntry.name : "");
+  const activeSplit = splits && splits[0];
+  const [splitDayId, setSplitDayId] = useState(null);
+  const splitDay = activeSplit && activeSplit.days.find((d) => d.id === splitDayId);
   const [sets, setSets] = useState(
     editingEntry && editingEntry.type === "strength" && editingEntry.sets && editingEntry.sets.length
       ? editingEntry.sets.map((s) => ({ weight: s.weight === 0 || s.weight ? String(s.weight) : "", reps: s.reps === 0 || s.reps ? String(s.reps) : "" }))
@@ -1840,6 +2102,39 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry }) {
 
   return (
     <div>
+      {!editingEntry && activeSplit && activeSplit.days.length > 0 && (
+        <div className="mb-3">
+          <div className="flex items-center gap-1.5 mb-2">
+            <Layers size={13} color={C.inkSoft} />
+            <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft, fontWeight: 600 }}>{activeSplit.name}</span>
+          </div>
+          <div className="flex gap-1.5 mb-2" style={{ overflowX: "auto" }}>
+            {activeSplit.days.map((d) => (
+              <button key={d.id} onClick={() => setSplitDayId(d.id === splitDayId ? null : d.id)} className="flex-shrink-0 px-3 py-1.5 rounded-full ft-body"
+                style={{ background: splitDayId === d.id ? C.blue : C.card, color: splitDayId === d.id ? "#fff" : C.ink, fontSize: 12, fontWeight: 600 }}>
+                {d.label}
+              </button>
+            ))}
+          </div>
+          {splitDay && (
+            splitDay.exercises.length === 0 ? (
+              <div className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>No exercises added to this day yet — edit your split in Profile.</div>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {splitDay.exercises.map((ex, i) => {
+                  const doneToday = exerciseLogs.some((e) => e.date === todayStr() && e.name.trim().toLowerCase() === ex.trim().toLowerCase());
+                  return (
+                    <button key={i} onClick={() => setName(ex)} className="flex items-center gap-1 px-2.5 py-1.5 rounded-full ft-body"
+                      style={{ background: name === ex ? C.ink : doneToday ? C.greenTint : C.card, color: name === ex ? C.onInk : doneToday ? C.green : C.ink, fontSize: 11.5, fontWeight: 500 }}>
+                      {doneToday && <Check size={11} />}{ex}
+                    </button>
+                  );
+                })}
+              </div>
+            )
+          )}
+        </div>
+      )}
       <div className="flex gap-2 mb-3 mt-1">
         <button onClick={() => setExType("strength")} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
           style={{ background: exType === "strength" ? C.ink : C.card, color: exType === "strength" ? C.onInk : C.ink, fontSize: 13, fontWeight: 600 }}><Dumbbell size={15} /> Strength</button>
@@ -1943,7 +2238,7 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry }) {
 
 
    
-function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight, darkMode, setDarkMode  }) {
+function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight, darkMode, setDarkMode, splits, onSaveSplits }) {
   const [local, setLocal] = useState(goals);
   const [saved, setSaved] = useState(false);
   const [weightInput, setWeightInput] = useState("");
@@ -2031,6 +2326,70 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
           ))}
         </div>
       )}
+
+      <div className="ft-body mb-3 mt-6" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Workout split</div>
+      <WorkoutSplitEditor splits={splits} onSave={onSaveSplits} />
+    </div>
+  );
+}
+
+// ---------- Workout split editor ----------
+// Edits a single named split (e.g. "Push Pull Legs") made of days, each just a
+// label + an ordered list of planned exercise names. Saved immediately on every
+// change. Nothing here forces a day's exercises to be logged — ExerciseForm just
+// offers them as one-tap starting points; anything skipped stays empty.
+function WorkoutSplitEditor({ splits, onSave }) {
+  const split = (splits && splits[0]) || { id: uid(), name: "My Split", days: [] };
+  const [newExerciseText, setNewExerciseText] = useState({});
+
+  function updateSplit(next) { onSave([next, ...(splits ? splits.slice(1) : [])]); }
+  function updateDay(dayId, patch) { updateSplit({ ...split, days: split.days.map((d) => (d.id === dayId ? { ...d, ...patch } : d)) }); }
+  function addDay() { updateSplit({ ...split, days: [...split.days, { id: uid(), label: "New day", exercises: [] }] }); }
+  function removeDay(dayId) { updateSplit({ ...split, days: split.days.filter((d) => d.id !== dayId) }); }
+  function addExercise(dayId) {
+    const text = (newExerciseText[dayId] || "").trim();
+    if (!text) return;
+    const day = split.days.find((d) => d.id === dayId);
+    updateDay(dayId, { exercises: [...day.exercises, text] });
+    setNewExerciseText((p) => ({ ...p, [dayId]: "" }));
+  }
+  function removeExercise(dayId, idx) {
+    const day = split.days.find((d) => d.id === dayId);
+    updateDay(dayId, { exercises: day.exercises.filter((_, i) => i !== idx) });
+  }
+
+  return (
+    <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 18 }}>
+      <input value={split.name} onChange={(e) => updateSplit({ ...split, name: e.target.value })} placeholder="Split name"
+        className="w-full ft-body mb-3" style={{ fontSize: 14, fontWeight: 700, color: C.ink, background: "transparent", border: "none", outline: "none" }} />
+      <div className="flex flex-col gap-3">
+        {split.days.map((day) => (
+          <div key={day.id} className="p-3" style={{ background: C.bgBottom, borderRadius: 14 }}>
+            <div className="flex items-center justify-between mb-2 gap-2">
+              <input value={day.label} onChange={(e) => updateDay(day.id, { label: e.target.value })} placeholder="Day label"
+                className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.ink, background: "transparent", border: "none", outline: "none", flex: 1, minWidth: 0 }} />
+              <button onClick={() => removeDay(day.id)} style={{ flexShrink: 0 }}><Trash2 size={14} color={C.pink} /></button>
+            </div>
+            {day.exercises.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {day.exercises.map((ex, i) => (
+                  <div key={i} className="flex items-center gap-1 pl-2.5 pr-1.5 py-1.5 rounded-full" style={{ background: C.card }}>
+                    <span className="ft-body" style={{ fontSize: 11.5, color: C.ink }}>{ex}</span>
+                    <button onClick={() => removeExercise(day.id, i)} className="flex items-center justify-center" style={{ width: 16, height: 16 }}><X size={10} color={C.inkSoft} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-1.5">
+              <input value={newExerciseText[day.id] || ""} onChange={(e) => setNewExerciseText((p) => ({ ...p, [day.id]: e.target.value }))}
+                onKeyDown={(e) => { if (e.key === "Enter") addExercise(day.id); }}
+                placeholder="Add exercise" className="flex-1 ft-body" style={{ fontSize: 12, color: C.ink, background: C.card, border: "none", borderRadius: 10, padding: "7px 10px", outline: "none" }} />
+              <button onClick={() => addExercise(day.id)} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: 10, background: C.orangeTint, flexShrink: 0 }}><Plus size={14} color={C.orange} /></button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button onClick={addDay} className="flex items-center gap-1.5 mt-3 ft-body" style={{ color: C.blue, fontSize: 12.5, fontWeight: 600 }}><Plus size={14} /> Add day</button>
     </div>
   );
 }
