@@ -1244,7 +1244,7 @@ export default function MealTracker() {
                       <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
                       <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} interval={2} />
                       <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={30} />
-                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}` }} />
+                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
                       <Bar dataKey="calories" fill={C.orange} radius={[3, 3, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
@@ -1256,7 +1256,7 @@ export default function MealTracker() {
                       <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
                       <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} interval={2} />
                       <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={30} />
-                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}` }} />
+                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
                       <Legend wrapperStyle={{ fontSize: 11 }} />
                       <Line type="monotone" dataKey="protein" stroke={C.purple} strokeWidth={2} dot={false} />
                       <Line type="monotone" dataKey="carbs" stroke={C.tan} strokeWidth={2} dot={false} />
@@ -1276,7 +1276,7 @@ export default function MealTracker() {
                           <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
                           <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} />
                           <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={34} domain={["dataMin - 2", "dataMax + 2"]} />
-                          <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}` }} />
+                          <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
                           {goals.targetWeight > 0 && (
                             <ReferenceLine y={goals.targetWeight} stroke={C.green} strokeDasharray="4 4" strokeWidth={1.5}
                               label={{ value: "Goal", position: "insideTopRight", fill: C.green, fontSize: 10 }} />
@@ -1331,7 +1331,7 @@ export default function MealTracker() {
                         <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
                         <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} interval={2} />
                         <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={34} />
-                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}` }} />
+                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
                         <Bar dataKey="volume" fill={C.blue} radius={[3, 3, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
@@ -1345,7 +1345,7 @@ export default function MealTracker() {
                         <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
                         <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} interval={2} />
                         <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={30} />
-                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}` }} />
+                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
                         <Bar dataKey="burned" fill={C.pink} radius={[3, 3, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
