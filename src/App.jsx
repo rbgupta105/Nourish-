@@ -5,7 +5,7 @@ import {
   Trash2, Loader2, TrendingUp, TrendingDown, Minus, X, Check,
   Flame, Trophy, Dumbbell, Wheat, Droplet, AlertCircle, Home, Activity, Sparkles,
   Star, Pencil, Copy, Droplets, ChevronLeft, ChevronRight, CalendarDays, Gauge,
-  Bell, Award, Layers, Brain, Lightbulb
+  Bell, Award, Layers, Brain, Lightbulb, Mic
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis,
@@ -572,6 +572,82 @@ Respond with ONLY valid JSON, no markdown fences, no commentary, in exactly this
 "summary" is one or two sentences recapping how the day went against goals (e.g. percentages reached, what stood out) — plain, encouraging, not clinical. "suggestions" is an array of exactly 2-3 short, concrete, actionable tips for tomorrow (each under ~20 words). Base everything only on the data given; don't invent details.`;
 }
 
+// ---------- Weekly AI Review ----------
+// Pulls together the same 7-vs-previous-7-day comparison used elsewhere in the
+// app (calories/macros), plus gym consistency, water, and weight trend, into one
+// stats object that gets handed to Gemini to narrate.
+function computeWeeklyReviewStats(logs, exerciseLogs, waterLogs, weights, goals) {
+  const thisStart = daysAgo(6), prevStart = daysAgo(13), prevEnd = daysAgo(7);
+  const thisLogs = logs.filter((l) => l.date >= thisStart);
+  const prevLogs = logs.filter((l) => l.date >= prevStart && l.date <= prevEnd);
+  const avgOf = (arr, key) => arr.length ? arr.reduce((s, l) => s + num(l[key]), 0) / 7 : 0;
+  const pctChange = (cur, prev) => prev > 0 ? Math.round(((cur - prev) / prev) * 100) : null;
+
+  const avgCalories = avgOf(thisLogs, "calories"), prevAvgCalories = avgOf(prevLogs, "calories");
+  const avgProtein = avgOf(thisLogs, "protein_g"), prevAvgProtein = avgOf(prevLogs, "protein_g");
+  const avgCarbs = avgOf(thisLogs, "carbs_g");
+  const avgFat = avgOf(thisLogs, "fat_g");
+
+  // Macro consistency: how much day-to-day calorie totals swing, as a % of the
+  // weekly average — lower is steadier. Days with nothing logged are excluded
+  // rather than counted as 0, which would otherwise always read as "inconsistent".
+  const dayTotals = []; for (let i = 6; i >= 0; i--) {
+    const d = daysAgo(i);
+    const dayLogs = logs.filter((l) => l.date === d);
+    if (dayLogs.length) dayTotals.push(dayLogs.reduce((s, l) => s + num(l.calories), 0));
+  }
+  let consistencyPct = null;
+  if (dayTotals.length >= 3) {
+    const mean = dayTotals.reduce((a, b) => a + b, 0) / dayTotals.length;
+    const variance = dayTotals.reduce((s, v) => s + (v - mean) ** 2, 0) / dayTotals.length;
+    const stdDev = Math.sqrt(variance);
+    consistencyPct = mean > 0 ? Math.round((stdDev / mean) * 100) : null;
+  }
+
+  const gymDays = new Set(exerciseLogs.filter((e) => e.date >= thisStart).map((e) => e.date)).size;
+  const avgWater = waterLogs.filter((w) => w.date >= thisStart).reduce((s, w) => s + num(w.ml), 0) / 7;
+  const weightPace = computeWeightPace(weights.filter((w) => new Date(w.timestamp).getTime() >= Date.now() - 13 * 86400000));
+
+  const daysLoggedThisWeek = new Set(thisLogs.map((l) => l.date)).size;
+  const calorieGoalDays = (() => {
+    let count = 0;
+    for (let i = 6; i >= 0; i--) {
+      const d = daysAgo(i);
+      const cal = logs.filter((l) => l.date === d).reduce((s, l) => s + num(l.calories), 0);
+      if (goals.calories > 0 && cal >= goals.calories * 0.9 && cal <= goals.calories * 1.15) count++;
+    }
+    return count;
+  })();
+
+  return {
+    avgCalories: Math.round(avgCalories), avgProtein: Math.round(avgProtein), avgCarbs: Math.round(avgCarbs), avgFat: Math.round(avgFat),
+    proteinChangePct: pctChange(avgProtein, prevAvgProtein), calorieChangePct: pctChange(avgCalories, prevAvgCalories),
+    consistencyPct, gymDays, avgWaterL: Math.round((avgWater / 1000) * 10) / 10,
+    weightPace, daysLoggedThisWeek, calorieGoalDays, goals,
+  };
+}
+
+function buildWeeklyReviewPrompt(stats) {
+  return `You are a supportive, practical weekly nutrition and fitness coach embedded in a tracking app. Write a short weekly review from the numbers below — no medical advice, just plain encouraging observations.
+
+This week's averages: ${stats.avgCalories} kcal/day, ${stats.avgProtein}g protein/day, ${stats.avgCarbs}g carbs/day, ${stats.avgFat}g fat/day.
+Protein vs. last week: ${stats.proteinChangePct == null ? "no prior data" : `${stats.proteinChangePct > 0 ? "+" : ""}${stats.proteinChangePct}%`}.
+Calories vs. last week: ${stats.calorieChangePct == null ? "no prior data" : `${stats.calorieChangePct > 0 ? "+" : ""}${stats.calorieChangePct}%`}.
+Day-to-day calorie consistency: ${stats.consistencyPct == null ? "not enough data" : `${stats.consistencyPct}% swing from the weekly average (lower = steadier)`}.
+Gym days this week: ${stats.gymDays}/7.
+Average water: ${stats.avgWaterL}L/day (goal ${(stats.goals.water || 2000) / 1000}L).
+Weight trend: ${stats.weightPace ? `${stats.weightPace.paceKgPerWeek > 0 ? "+" : ""}${stats.weightPace.paceKgPerWeek.toFixed(2)}kg/week` : "not enough weigh-ins"}.
+Days with at least one meal logged: ${stats.daysLoggedThisWeek}/7.
+Days calorie goal was hit: ${stats.calorieGoalDays}/7.
+
+Respond with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:
+{
+  "summary": string,
+  "focus_next_week": string
+}
+"summary" is 1-2 short sentences in the style of "This week: protein improved 12%, weight stable, gym consistency 5/7 days" — pick the 2-3 most notable numbers from above, stated plainly. "focus_next_week" is one concrete, specific suggestion for next week (e.g. "Increase protein by ~15g/day"). Base everything only on the numbers given; don't invent details.`;
+}
+
 // ---------- Personal records & progressive overload ----------
 // Estimated 1-rep-max via the Epley formula — used to compare sets of different
 // weight/rep combinations on a like-for-like basis.
@@ -939,10 +1015,11 @@ export default function MealTracker() {
   const [waterLogs, setWaterLogs] = useState([]);
   const [splits, setSplits] = useState([]);
   const [dailyCoach, setDailyCoach] = useState(null); // { date, summary, suggestions }
+  const [weeklyReview, setWeeklyReview] = useState(null); // { weekStart, summary, focusNextWeek, generatedAt }
   const [editingEntry, setEditingEntry] = useState(null);
 
   const loadAll = useCallback(async () => {
-    const [p, g, l, w, e, f, wa, sp, dc] = await Promise.all([
+    const [p, g, l, w, e, f, wa, sp, dc, wr] = await Promise.all([
       loadKey("profile", { name: "" }),
       loadKey("goals", { calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0 }),
       loadKey("meal-logs", []),
@@ -952,11 +1029,13 @@ export default function MealTracker() {
       loadKey("water-logs", []),
       loadKey("workout-splits", DEFAULT_SPLITS),
       loadKey("daily-coach", null),
+      loadKey("weekly-review", null),
     ]);
-    setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setWaterLogs(wa); setSplits(sp); setDailyCoach(dc); setReady(true);
+    setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setWaterLogs(wa); setSplits(sp); setDailyCoach(dc); setWeeklyReview(wr); setReady(true);
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
 
   // ---------- Pull-to-refresh ----------
   // Touch-driven, no external library: tracks a downward drag that only starts
@@ -1055,6 +1134,7 @@ export default function MealTracker() {
   async function persistExercise(next) { setExerciseLogs(next); await saveKey("exercise-logs", next); }
   async function persistSplits(next) { setSplits(next); await saveKey("workout-splits", next); }
   async function persistDailyCoach(next) { setDailyCoach(next); await saveKey("daily-coach", next); }
+  async function persistWeeklyReview(next) { setWeeklyReview(next); await saveKey("weekly-review", next); }
   async function persistFavorites(next) { setFavorites(next); await saveKey("favorite-meals", next); }
 
   async function deleteLog(id) { haptic("delete"); await persistLogs(logs.filter((l) => l.id !== id)); }
@@ -1148,6 +1228,35 @@ export default function MealTracker() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, nowTick, todayLogs.length, dailyCoach]);
 
+  // ---------- Weekly AI Review ----------
+  const [weeklyReviewLoading, setWeeklyReviewLoading] = useState(false);
+  const [weeklyReviewError, setWeeklyReviewError] = useState(null);
+  const currentWeekStart = daysAgo(6);
+  async function generateWeeklyReview() {
+    setWeeklyReviewLoading(true); setWeeklyReviewError(null);
+    try {
+      const stats = computeWeeklyReviewStats(logs, exerciseLogs, waterLogs, weights, goals);
+      const promptText = buildWeeklyReviewPrompt(stats);
+      const raw = await callGemini([{ type: "text", text: promptText }]);
+      const parsed = parseJSON(raw);
+      const next = { weekStart: currentWeekStart, summary: parsed.summary || "", focusNextWeek: parsed.focus_next_week || "", generatedAt: Date.now() };
+      await persistWeeklyReview(next);
+    } catch (e) {
+      setWeeklyReviewError(e && e.message ? e.message : "Couldn't generate this week's review.");
+    } finally { setWeeklyReviewLoading(false); }
+  }
+  // Auto-generate once every 7 days (by rolling week-start, not calendar week),
+  // once there's at least 3 days of logs in the current window, evenings only.
+  useEffect(() => {
+    if (!ready) return;
+    const hour = nowTick.getHours();
+    const daysLoggedThisWindow = new Set(logs.filter((l) => l.date >= currentWeekStart).map((l) => l.date)).size;
+    if (hour >= 19 && daysLoggedThisWindow >= 3 && (!weeklyReview || weeklyReview.weekStart !== currentWeekStart) && !weeklyReviewLoading) {
+      generateWeeklyReview();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, nowTick, currentWeekStart, logs.length, weeklyReview]);
+
   if (!ready) return <div className="flex items-center justify-center" style={{ height: 700, background: C.bgTop }}><Loader2 className="animate-spin" size={22} color={C.orange} /></div>;
 
   const trimmedName = profile.name ? profile.name.trim() : "";
@@ -1172,12 +1281,8 @@ export default function MealTracker() {
             <Avatar initial={initial} />
             <div>
               <div className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 500 }}>{greeting()}</div>
-              {profile.name ? (
-                <div className="ft-display" style={{ fontSize: 19, fontWeight: 700, color: C.ink }}>{profile.name}</div>
-              ) : (
-                <input value={profile.name} onChange={(e) => persistProfile({ ...profile, name: e.target.value })} placeholder="Add your name"
-                  className="ft-display" style={{ fontSize: 16, fontWeight: 700, color: C.inkSoft, background: "transparent", border: "none", outline: "none" }} />
-              )}
+              <input value={profile.name} onChange={(e) => persistProfile({ ...profile, name: e.target.value })} placeholder="Add your name"
+                className="ft-display" style={{ fontSize: 19, fontWeight: 700, color: profile.name ? C.ink : C.inkSoft, background: "transparent", border: "none", outline: "none", width: "100%" }} />
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -1611,6 +1716,42 @@ export default function MealTracker() {
               </>
             ) : (
               <>
+                <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                  <div className="flex items-center gap-2 mb-2.5">
+                    <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.blueTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <BarChart3 size={15} color={C.blue} />
+                    </div>
+                    <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Weekly AI Review</span>
+                  </div>
+                  {weeklyReviewLoading ? (
+                    <div className="flex items-center gap-2 py-2">
+                      <Loader2 size={14} className="animate-spin" color={C.blue} />
+                      <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Analyzing this week…</span>
+                    </div>
+                  ) : weeklyReview && weeklyReview.weekStart === currentWeekStart ? (
+                    <>
+                      <div className="ft-body mb-2.5" style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.45 }}>{weeklyReview.summary}</div>
+                      {weeklyReview.focusNextWeek && (
+                        <div className="flex items-start gap-2 p-2.5 mb-2" style={{ background: C.orangeTint, borderRadius: 12 }}>
+                          <Sparkles size={13} color={C.orange} style={{ flexShrink: 0, marginTop: 1 }} />
+                          <span className="ft-body" style={{ fontSize: 12, color: C.ink, lineHeight: 1.4 }}><span style={{ fontWeight: 700 }}>Focus next week: </span>{weeklyReview.focusNextWeek}</span>
+                        </div>
+                      )}
+                      <button onClick={generateWeeklyReview} className="ft-body" style={{ fontSize: 11.5, color: C.blue, fontWeight: 600 }}>Refresh</button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="ft-body mb-3" style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.4 }}>
+                        Reviews auto-generate every 7 days once there's enough logged data — or generate one now.
+                      </div>
+                      <button onClick={generateWeeklyReview} className="flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 12, fontWeight: 600 }}>
+                        <Sparkles size={13} />Generate this week's review
+                      </button>
+                    </>
+                  )}
+                  {weeklyReviewError && <div className="ft-body mt-2" style={{ fontSize: 11.5, color: C.pink }}>{weeklyReviewError}</div>}
+                </div>
+
                 <div className="flex gap-2 mb-4">
                   <Chip active={chartsPeriod === "week"} onClick={() => setChartsPeriod("week")} label="This week" />
                   <Chip active={chartsPeriod === "month"} onClick={() => setChartsPeriod("month")} label="This month" />
@@ -1821,13 +1962,14 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     }
   }
 
-  async function analyze() {
+  async function analyze(overrideDescription) {
+    const descriptionToUse = overrideDescription != null ? overrideDescription : description;
     setError(null); setPending(null);
     if (mode === "photo" && !imagePreview) { setError("Add a photo first."); return; }
-    if (mode === "text" && description.trim().length < 2) { setError("Describe what you ate first."); return; }
+    if (mode === "text" && descriptionToUse.trim().length < 2) { setError("Describe what you ate first."); return; }
     setAnalyzing(true);
     try {
-      const promptText = buildMealPrompt({ mode, description, goals, todayTotals, todayLogs });
+      const promptText = buildMealPrompt({ mode, description: descriptionToUse, goals, todayTotals, todayLogs });
       const blocks = mode === "photo"
         ? [{ type: "image", source: { type: "base64", media_type: imagePreview.mediaType, data: imagePreview.b64 } }, { type: "text", text: promptText }]
         : [{ type: "text", text: promptText }];
@@ -1835,7 +1977,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       const parsed = parseJSON(raw);
       const estimatedPortion = parsed.estimated_portion || "";
       setPending({
-        food_name: parsed.food_name || (mode === "text" ? description : "Logged meal"),
+        food_name: parsed.food_name || (mode === "text" ? descriptionToUse : "Logged meal"),
         estimated_portion: estimatedPortion,
         calories: num(parsed.calories), protein_g: num(parsed.protein_g), carbs_g: num(parsed.carbs_g), fat_g: num(parsed.fat_g),
         fiber_g: num(parsed.fiber_g), sugar_g: num(parsed.sugar_g), sodium_mg: num(parsed.sodium_mg),
@@ -1847,10 +1989,54 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       setLastCalculatedPortion(estimatedPortion);
     } catch (e) {
       setError((e && e.message ? e.message : "Couldn't analyze that meal") + " — enter it manually below.");
-      setPending({ ...EMPTY_MEAL, food_name: mode === "text" ? description : "Logged meal" });
+      setPending({ ...EMPTY_MEAL, food_name: mode === "text" ? descriptionToUse : "Logged meal" });
       setLastCalculatedPortion("");
     } finally { setAnalyzing(false); }
   }
+
+  // ---------- Natural voice logging ----------
+  // Uses the browser's built-in speech recognition (no API/network cost of its
+  // own) to transcribe spoken food descriptions, then feeds the transcript
+  // straight into the same Gemini meal-analysis call used for typed text — so
+  // "2 rotis, one bowl dal, 100g paneer" is understood and logged as one meal
+  // without the user typing or splitting it into separate entries.
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef(null);
+  const speechSupported = typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+  function toggleVoiceInput() {
+    if (listening) { recognitionRef.current && recognitionRef.current.stop(); return; }
+    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) { setError("Voice input isn't supported in this browser."); return; }
+    setError(null);
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = (navigator.language || "en-US");
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    let finalTranscript = "";
+    recognition.onresult = (event) => {
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const chunk = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalTranscript += chunk;
+        else interim += chunk;
+      }
+      setDescription((finalTranscript + interim).trim());
+    };
+    recognition.onerror = (event) => {
+      setListening(false);
+      if (event.error !== "no-speech" && event.error !== "aborted") setError("Couldn't hear that — try again or type instead.");
+    };
+    recognition.onend = () => {
+      setListening(false);
+      const transcript = finalTranscript.trim();
+      if (transcript.length >= 2) analyze(transcript);
+    };
+    recognitionRef.current = recognition;
+    setListening(true);
+    recognition.start();
+  }
+  useEffect(() => () => { recognitionRef.current && recognitionRef.current.stop(); }, []);
 
   async function getPortionAdvice() {
     if (!pending || !pending.food_name || !pending.calories) { setError("Fill in the meal name and calories first."); return; }
@@ -1976,11 +2162,20 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
               )}
             </div>
           ) : (
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. grilled chicken breast, half cup rice, side of steamed broccoli"
-              className="w-full p-3 rounded-2xl ft-body mb-3" style={{ border: "none", background: C.card, color: C.ink, fontSize: 14, minHeight: 90, resize: "none", outline: "none" }} />
+            <div className="relative mb-3">
+              <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. 2 rotis, one bowl dal, 100g paneer"
+                className="w-full p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 14, minHeight: 90, resize: "none", outline: "none", paddingRight: 46 }} />
+              {speechSupported && (
+                <button onClick={toggleVoiceInput} type="button" className="absolute flex items-center justify-center" title={listening ? "Stop listening" : "Speak your meal"}
+                  style={{ top: 10, right: 10, width: 30, height: 30, borderRadius: "50%", background: listening ? C.pink : C.orangeTint }}>
+                  <Mic size={14} color={listening ? "#fff" : C.orange} className={listening ? "animate-pulse" : ""} />
+                </button>
+              )}
+              {listening && <div className="ft-body mt-1.5" style={{ fontSize: 11, color: C.pink }}>Listening… speak naturally, e.g. "2 rotis, one bowl dal, and 100 grams paneer"</div>}
+            </div>
           )}
           {error && (<div className="flex items-start gap-2 p-2.5 mb-3 rounded-xl" style={{ background: C.pinkTint }}><AlertCircle size={15} color={C.pink} style={{ flexShrink: 0, marginTop: 1 }} /><span className="ft-body" style={{ fontSize: 12, color: C.pink }}>{error}</span></div>)}
-          <button onClick={analyze} disabled={analyzing || compressing} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 14, fontWeight: 600, opacity: analyzing ? 0.7 : 1 }}>
+          <button onClick={() => analyze()} disabled={analyzing || compressing} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 14, fontWeight: 600, opacity: analyzing ? 0.7 : 1 }}>
             {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Utensils size={16} />}{analyzing ? "Analyzing meal…" : "Analyze meal"}
           </button>
           {analyzing && <NutritionSkeleton />}
