@@ -1574,10 +1574,9 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
         : [{ type: "text", text: promptText }];
       const raw = await callGemini(blocks);
       const parsed = parseJSON(raw);
-      const estimatedPortion = parsed.estimated_portion || "";
       setPending({
         food_name: parsed.food_name || (mode === "text" ? description : "Logged meal"),
-        estimated_portion: estimatedPortion,
+        estimated_portion: parsed.estimated_portion || "",
         calories: num(parsed.calories), protein_g: num(parsed.protein_g), carbs_g: num(parsed.carbs_g), fat_g: num(parsed.fat_g),
         fiber_g: num(parsed.fiber_g), sugar_g: num(parsed.sugar_g), sodium_mg: num(parsed.sodium_mg),
         micronutrients: Array.isArray(parsed.micronutrients) ? parsed.micronutrients : [],
@@ -1585,11 +1584,9 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
         portion_verdict: parsed.portion_verdict || "keep", portion_change_percent: num(parsed.portion_change_percent),
         portion_guidance: parsed.portion_guidance || "",
       });
-      setLastCalculatedPortion(estimatedPortion);
     } catch (e) {
       setError((e && e.message ? e.message : "Couldn't analyze that meal") + " — enter it manually below.");
       setPending({ ...EMPTY_MEAL, food_name: mode === "text" ? description : "Logged meal" });
-      setLastCalculatedPortion("");
     } finally { setAnalyzing(false); }
   }
 
@@ -1606,38 +1603,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     } finally { setAdvising(false); }
   }
 
-  // Tracks the portion text the current nutrition numbers actually correspond
-  // to, so we know when the user has edited it (e.g. "1 cup rice" -> "1/2 cup
-  // rice") and the numbers below are now stale.
-  const [lastCalculatedPortion, setLastCalculatedPortion] = useState(editingEntry ? (editingEntry.estimated_portion || "") : "");
-  const [recalculating, setRecalculating] = useState(false);
-  const portionIsStale = !!pending && pending.estimated_portion !== lastCalculatedPortion;
-
   function updateField(key, value) { setPending((p) => ({ ...p, [key]: key === "food_name" || key === "estimated_portion" ? value : num(value) })); }
-
-  async function recalculateFromPortion() {
-    if (!pending || !pending.food_name) { setError("Give the meal a name first."); return; }
-    setError(null); setRecalculating(true);
-    try {
-      const description2 = `${pending.food_name}${pending.estimated_portion ? ` — portion: ${pending.estimated_portion}` : ""}`;
-      const promptText = buildMealPrompt({ mode: "text", description: description2, goals, todayTotals, todayLogs });
-      const raw = await callGemini([{ type: "text", text: promptText }]);
-      const parsed = parseJSON(raw);
-      setPending((p) => ({
-        ...p,
-        estimated_portion: parsed.estimated_portion || p.estimated_portion,
-        calories: num(parsed.calories), protein_g: num(parsed.protein_g), carbs_g: num(parsed.carbs_g), fat_g: num(parsed.fat_g),
-        fiber_g: num(parsed.fiber_g), sugar_g: num(parsed.sugar_g), sodium_mg: num(parsed.sodium_mg),
-        micronutrients: Array.isArray(parsed.micronutrients) ? parsed.micronutrients : p.micronutrients,
-        confidence: parsed.confidence || p.confidence,
-        portion_verdict: parsed.portion_verdict || "keep", portion_change_percent: num(parsed.portion_change_percent),
-        portion_guidance: parsed.portion_guidance || "",
-      }));
-      setLastCalculatedPortion(parsed.estimated_portion || pending.estimated_portion);
-    } catch (e) {
-      setError(e && e.message ? e.message : "Couldn't recalculate nutrition for that portion.");
-    } finally { setRecalculating(false); }
-  }
 
   async function save() {
     if (!pending || !pending.food_name) { setError("Give the meal a name."); return; }
@@ -1739,17 +1705,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
             </button>
           </div>
           <input value={pending.estimated_portion} onChange={(e) => updateField("estimated_portion", e.target.value)} placeholder="Portion (e.g. 1 cup, 200g)"
-            className="w-full ft-body mb-2" style={{ fontSize: 12, color: C.inkSoft, background: "transparent", border: "none", outline: "none" }} />
-
-          {portionIsStale && (
-            <div className="flex items-center justify-between gap-2 p-2.5 mb-3 rounded-xl" style={{ background: C.orangeTint }}>
-              <span className="ft-body" style={{ fontSize: 12, color: C.orangeDeep, lineHeight: 1.35 }}>Portion changed — nutrition below is for the old amount.</span>
-              <button onClick={recalculateFromPortion} disabled={recalculating} className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-full ft-body flex-shrink-0"
-                style={{ background: C.ink, color: C.onInk, fontSize: 12, fontWeight: 600, opacity: recalculating ? 0.7 : 1 }}>
-                {recalculating ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}{recalculating ? "Recalculating…" : "Recalculate nutrition"}
-              </button>
-            </div>
-          )}
+            className="w-full ft-body mb-3" style={{ fontSize: 12, color: C.inkSoft, background: "transparent", border: "none", outline: "none" }} />
           {pending.portion_guidance ? (
             <div className="flex items-start gap-2 p-3 mb-3 rounded-xl" style={{ background: C.orangeTint }}>
               <div style={{ marginTop: 1 }}><GuidanceIcon text={pending.portion_guidance} /></div>
