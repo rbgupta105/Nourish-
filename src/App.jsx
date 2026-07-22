@@ -4,7 +4,7 @@ import {
   Camera, Type, Utensils, ClipboardList, BarChart3, User, Plus,
   Trash2, Loader2, TrendingUp, TrendingDown, Minus, X, Check,
   Flame, Trophy, Dumbbell, Wheat, Droplet, AlertCircle, Home, Activity, Sparkles,
-  Star, Pencil, Copy, Droplets, ChevronLeft, ChevronRight, CalendarDays, Gauge,
+  Star, Pencil, Copy, Droplets, ChevronLeft, ChevronRight, ChevronDown, CalendarDays, Gauge,
   Bell, Award, Layers, Brain, Lightbulb, Mic
 } from "lucide-react";
 import {
@@ -572,15 +572,15 @@ Respond with ONLY valid JSON, no markdown fences, no commentary, in exactly this
 "summary" is one or two sentences recapping how the day went against goals (e.g. percentages reached, what stood out) — plain, encouraging, not clinical. "suggestions" is an array of exactly 2-3 short, concrete, actionable tips for tomorrow (each under ~20 words). Base everything only on the data given; don't invent details.`;
 }
 
-// ---------- Weekly AI Review ----------
-// Pulls together the same 7-vs-previous-7-day comparison used elsewhere in the
-// app (calories/macros), plus gym consistency, water, and weight trend, into one
-// stats object that gets handed to Gemini to narrate.
-function computeWeeklyReviewStats(logs, exerciseLogs, waterLogs, weights, goals) {
-  const thisStart = daysAgo(6), prevStart = daysAgo(13), prevEnd = daysAgo(7);
+// ---------- Weekly / Monthly AI Review ----------
+// Pulls together a period-vs-previous-period comparison (calories/macros), plus
+// gym consistency, water, and weight trend, into one stats object that gets
+// handed to Gemini to narrate. Shared by both the 7-day and 30-day reviews.
+function computePeriodReviewStats(logs, exerciseLogs, waterLogs, weights, goals, periodDays) {
+  const thisStart = daysAgo(periodDays - 1), prevStart = daysAgo(periodDays * 2 - 1), prevEnd = daysAgo(periodDays);
   const thisLogs = logs.filter((l) => l.date >= thisStart);
   const prevLogs = logs.filter((l) => l.date >= prevStart && l.date <= prevEnd);
-  const avgOf = (arr, key) => arr.length ? arr.reduce((s, l) => s + num(l[key]), 0) / 7 : 0;
+  const avgOf = (arr, key) => arr.length ? arr.reduce((s, l) => s + num(l[key]), 0) / periodDays : 0;
   const pctChange = (cur, prev) => prev > 0 ? Math.round(((cur - prev) / prev) * 100) : null;
 
   const avgCalories = avgOf(thisLogs, "calories"), prevAvgCalories = avgOf(prevLogs, "calories");
@@ -588,10 +588,10 @@ function computeWeeklyReviewStats(logs, exerciseLogs, waterLogs, weights, goals)
   const avgCarbs = avgOf(thisLogs, "carbs_g");
   const avgFat = avgOf(thisLogs, "fat_g");
 
-  // Macro consistency: how much day-to-day calorie totals swing, as a % of the
-  // weekly average — lower is steadier. Days with nothing logged are excluded
+  // Day-to-day consistency: how much daily calorie totals swing, as a % of the
+  // period average — lower is steadier. Days with nothing logged are excluded
   // rather than counted as 0, which would otherwise always read as "inconsistent".
-  const dayTotals = []; for (let i = 6; i >= 0; i--) {
+  const dayTotals = []; for (let i = periodDays - 1; i >= 0; i--) {
     const d = daysAgo(i);
     const dayLogs = logs.filter((l) => l.date === d);
     if (dayLogs.length) dayTotals.push(dayLogs.reduce((s, l) => s + num(l.calories), 0));
@@ -605,13 +605,13 @@ function computeWeeklyReviewStats(logs, exerciseLogs, waterLogs, weights, goals)
   }
 
   const gymDays = new Set(exerciseLogs.filter((e) => e.date >= thisStart).map((e) => e.date)).size;
-  const avgWater = waterLogs.filter((w) => w.date >= thisStart).reduce((s, w) => s + num(w.ml), 0) / 7;
-  const weightPace = computeWeightPace(weights.filter((w) => new Date(w.timestamp).getTime() >= Date.now() - 13 * 86400000));
+  const avgWater = waterLogs.filter((w) => w.date >= thisStart).reduce((s, w) => s + num(w.ml), 0) / periodDays;
+  const weightPace = computeWeightPace(weights.filter((w) => new Date(w.timestamp).getTime() >= Date.now() - (periodDays * 2 - 1) * 86400000));
 
-  const daysLoggedThisWeek = new Set(thisLogs.map((l) => l.date)).size;
+  const daysLoggedThisPeriod = new Set(thisLogs.map((l) => l.date)).size;
   const calorieGoalDays = (() => {
     let count = 0;
-    for (let i = 6; i >= 0; i--) {
+    for (let i = periodDays - 1; i >= 0; i--) {
       const d = daysAgo(i);
       const cal = logs.filter((l) => l.date === d).reduce((s, l) => s + num(l.calories), 0);
       if (goals.calories > 0 && cal >= goals.calories * 0.9 && cal <= goals.calories * 1.15) count++;
@@ -620,33 +620,42 @@ function computeWeeklyReviewStats(logs, exerciseLogs, waterLogs, weights, goals)
   })();
 
   return {
+    periodDays,
     avgCalories: Math.round(avgCalories), avgProtein: Math.round(avgProtein), avgCarbs: Math.round(avgCarbs), avgFat: Math.round(avgFat),
     proteinChangePct: pctChange(avgProtein, prevAvgProtein), calorieChangePct: pctChange(avgCalories, prevAvgCalories),
     consistencyPct, gymDays, avgWaterL: Math.round((avgWater / 1000) * 10) / 10,
-    weightPace, daysLoggedThisWeek, calorieGoalDays, goals,
+    weightPace, daysLoggedThisPeriod, calorieGoalDays, goals,
   };
 }
+function computeWeeklyReviewStats(logs, exerciseLogs, waterLogs, weights, goals) {
+  return computePeriodReviewStats(logs, exerciseLogs, waterLogs, weights, goals, 7);
+}
+function computeMonthlyReviewStats(logs, exerciseLogs, waterLogs, weights, goals) {
+  return computePeriodReviewStats(logs, exerciseLogs, waterLogs, weights, goals, 30);
+}
 
-function buildWeeklyReviewPrompt(stats) {
-  return `You are a supportive, practical weekly nutrition and fitness coach embedded in a tracking app. Write a short weekly review from the numbers below — no medical advice, just plain encouraging observations.
+function buildPeriodReviewPrompt(stats, periodLabel, priorLabel) {
+  return `You are a supportive, practical nutrition and fitness coach embedded in a tracking app. Write a short ${periodLabel} review from the numbers below — no medical advice, just plain encouraging observations.
 
-This week's averages: ${stats.avgCalories} kcal/day, ${stats.avgProtein}g protein/day, ${stats.avgCarbs}g carbs/day, ${stats.avgFat}g fat/day.
-Protein vs. last week: ${stats.proteinChangePct == null ? "no prior data" : `${stats.proteinChangePct > 0 ? "+" : ""}${stats.proteinChangePct}%`}.
-Calories vs. last week: ${stats.calorieChangePct == null ? "no prior data" : `${stats.calorieChangePct > 0 ? "+" : ""}${stats.calorieChangePct}%`}.
-Day-to-day calorie consistency: ${stats.consistencyPct == null ? "not enough data" : `${stats.consistencyPct}% swing from the weekly average (lower = steadier)`}.
-Gym days this week: ${stats.gymDays}/7.
+This ${periodLabel}'s averages: ${stats.avgCalories} kcal/day, ${stats.avgProtein}g protein/day, ${stats.avgCarbs}g carbs/day, ${stats.avgFat}g fat/day.
+Protein vs. ${priorLabel}: ${stats.proteinChangePct == null ? "no prior data" : `${stats.proteinChangePct > 0 ? "+" : ""}${stats.proteinChangePct}%`}.
+Calories vs. ${priorLabel}: ${stats.calorieChangePct == null ? "no prior data" : `${stats.calorieChangePct > 0 ? "+" : ""}${stats.calorieChangePct}%`}.
+Day-to-day calorie consistency: ${stats.consistencyPct == null ? "not enough data" : `${stats.consistencyPct}% swing from the ${periodLabel} average (lower = steadier)`}.
+Gym days this ${periodLabel}: ${stats.gymDays}/${stats.periodDays}.
 Average water: ${stats.avgWaterL}L/day (goal ${(stats.goals.water || 2000) / 1000}L).
 Weight trend: ${stats.weightPace ? `${stats.weightPace.paceKgPerWeek > 0 ? "+" : ""}${stats.weightPace.paceKgPerWeek.toFixed(2)}kg/week` : "not enough weigh-ins"}.
-Days with at least one meal logged: ${stats.daysLoggedThisWeek}/7.
-Days calorie goal was hit: ${stats.calorieGoalDays}/7.
+Days with at least one meal logged: ${stats.daysLoggedThisPeriod}/${stats.periodDays}.
+Days calorie goal was hit: ${stats.calorieGoalDays}/${stats.periodDays}.
 
 Respond with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:
 {
   "summary": string,
-  "focus_next_week": string
+  "focus_next_period": string
 }
-"summary" is 1-2 short sentences in the style of "This week: protein improved 12%, weight stable, gym consistency 5/7 days" — pick the 2-3 most notable numbers from above, stated plainly. "focus_next_week" is one concrete, specific suggestion for next week (e.g. "Increase protein by ~15g/day"). Base everything only on the numbers given; don't invent details.`;
+"summary" is 1-2 short sentences in the style of "This ${periodLabel}: protein improved 12%, weight stable, gym consistency 5/${stats.periodDays} days" — pick the 2-3 most notable numbers from above, stated plainly. "focus_next_period" is one concrete, specific suggestion for next ${periodLabel} (e.g. "Increase protein by ~15g/day"). Base everything only on the numbers given; don't invent details.`;
 }
+function buildWeeklyReviewPrompt(stats) { return buildPeriodReviewPrompt(stats, "week", "last week"); }
+function buildMonthlyReviewPrompt(stats) { return buildPeriodReviewPrompt(stats, "month", "last month"); }
 
 // ---------- Personal records & progressive overload ----------
 // Estimated 1-rep-max via the Epley formula — used to compare sets of different
@@ -1016,10 +1025,11 @@ export default function MealTracker() {
   const [splits, setSplits] = useState([]);
   const [dailyCoach, setDailyCoach] = useState(null); // { date, summary, suggestions }
   const [weeklyReview, setWeeklyReview] = useState(null); // { weekStart, summary, focusNextWeek, generatedAt }
+  const [monthlyReview, setMonthlyReview] = useState(null); // { monthStart, summary, focusNextMonth, generatedAt }
   const [editingEntry, setEditingEntry] = useState(null);
 
   const loadAll = useCallback(async () => {
-    const [p, g, l, w, e, f, wa, sp, dc, wr] = await Promise.all([
+    const [p, g, l, w, e, f, wa, sp, dc, wr, mr] = await Promise.all([
       loadKey("profile", { name: "" }),
       loadKey("goals", { calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0 }),
       loadKey("meal-logs", []),
@@ -1030,8 +1040,9 @@ export default function MealTracker() {
       loadKey("workout-splits", DEFAULT_SPLITS),
       loadKey("daily-coach", null),
       loadKey("weekly-review", null),
+      loadKey("monthly-review", null),
     ]);
-    setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setWaterLogs(wa); setSplits(sp); setDailyCoach(dc); setWeeklyReview(wr); setReady(true);
+    setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setWaterLogs(wa); setSplits(sp); setDailyCoach(dc); setWeeklyReview(wr); setMonthlyReview(mr); setReady(true);
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
@@ -1108,14 +1119,6 @@ export default function MealTracker() {
     return best;
   }, [logs]);
 
-  const weekExercise = useMemo(() => {
-    const cutoff = daysAgo(6);
-    const inWeek = exerciseLogs.filter((e) => e.date >= cutoff);
-    const sessions = new Set(inWeek.map((e) => e.date)).size;
-    const volume = inWeek.reduce((sum, e) => e.type === "strength" ? sum + e.sets.reduce((s, x) => s + num(x.weight) * num(x.reps), 0) : sum, 0);
-    return { sessions, volume: Math.round(volume) };
-  }, [exerciseLogs]);
-
   async function persistLogs(next) { setLogs(next); await saveKey("meal-logs", next); }
   async function persistWeights(next) { setWeights(next); await saveKey("weight-logs", next); }
   async function persistWater(next) { setWaterLogs(next); await saveKey("water-logs", next); }
@@ -1135,6 +1138,7 @@ export default function MealTracker() {
   async function persistSplits(next) { setSplits(next); await saveKey("workout-splits", next); }
   async function persistDailyCoach(next) { setDailyCoach(next); await saveKey("daily-coach", next); }
   async function persistWeeklyReview(next) { setWeeklyReview(next); await saveKey("weekly-review", next); }
+  async function persistMonthlyReview(next) { setMonthlyReview(next); await saveKey("monthly-review", next); }
   async function persistFavorites(next) { setFavorites(next); await saveKey("favorite-meals", next); }
 
   async function deleteLog(id) { haptic("delete"); await persistLogs(logs.filter((l) => l.id !== id)); }
@@ -1239,7 +1243,7 @@ export default function MealTracker() {
       const promptText = buildWeeklyReviewPrompt(stats);
       const raw = await callGemini([{ type: "text", text: promptText }]);
       const parsed = parseJSON(raw);
-      const next = { weekStart: currentWeekStart, summary: parsed.summary || "", focusNextWeek: parsed.focus_next_week || "", generatedAt: Date.now() };
+      const next = { weekStart: currentWeekStart, summary: parsed.summary || "", focusNextWeek: parsed.focus_next_period || "", generatedAt: Date.now() };
       await persistWeeklyReview(next);
     } catch (e) {
       setWeeklyReviewError(e && e.message ? e.message : "Couldn't generate this week's review.");
@@ -1256,6 +1260,35 @@ export default function MealTracker() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, nowTick, currentWeekStart, logs.length, weeklyReview]);
+
+  // ---------- Monthly AI Review ----------
+  const [monthlyReviewLoading, setMonthlyReviewLoading] = useState(false);
+  const [monthlyReviewError, setMonthlyReviewError] = useState(null);
+  const currentMonthStart = daysAgo(29);
+  async function generateMonthlyReview() {
+    setMonthlyReviewLoading(true); setMonthlyReviewError(null);
+    try {
+      const stats = computeMonthlyReviewStats(logs, exerciseLogs, waterLogs, weights, goals);
+      const promptText = buildMonthlyReviewPrompt(stats);
+      const raw = await callGemini([{ type: "text", text: promptText }]);
+      const parsed = parseJSON(raw);
+      const next = { monthStart: currentMonthStart, summary: parsed.summary || "", focusNextMonth: parsed.focus_next_period || "", generatedAt: Date.now() };
+      await persistMonthlyReview(next);
+    } catch (e) {
+      setMonthlyReviewError(e && e.message ? e.message : "Couldn't generate this month's review.");
+    } finally { setMonthlyReviewLoading(false); }
+  }
+  // Auto-generate once every 30 days (by rolling month-start), once there's
+  // meaningfully enough logging history in the window, evenings only.
+  useEffect(() => {
+    if (!ready) return;
+    const hour = nowTick.getHours();
+    const daysLoggedThisWindow = new Set(logs.filter((l) => l.date >= currentMonthStart).map((l) => l.date)).size;
+    if (hour >= 19 && daysLoggedThisWindow >= 10 && (!monthlyReview || monthlyReview.monthStart !== currentMonthStart) && !monthlyReviewLoading) {
+      generateMonthlyReview();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, nowTick, currentMonthStart, logs.length, monthlyReview]);
 
   if (!ready) return <div className="flex items-center justify-center" style={{ height: 700, background: C.bgTop }}><Loader2 className="animate-spin" size={22} color={C.orange} /></div>;
 
@@ -1421,41 +1454,6 @@ export default function MealTracker() {
                 </>
               )}
               {coachError && <div className="ft-body mt-2" style={{ fontSize: 11.5, color: C.pink }}>{coachError}</div>}
-            </div>
-
-            <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Log your meal</div>
-            <div className="p-4 mb-5" style={{ background: C.card, borderRadius: 24, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
-              <div className="flex items-center gap-1.5 mb-4">
-                <Flame size={14} color={C.orange} />
-                <span className="ft-body" style={{ fontSize: 11.5, fontWeight: 700, color: C.orange, letterSpacing: 0.5, textTransform: "uppercase" }}>Calories remaining</span>
-              </div>
-              <div className="flex items-center justify-between">
-                {[{ key: "photo", label: "Photo", icon: Camera }, { key: "text", label: "Describe", icon: Type }, { key: "manual", label: "Manual", icon: Utensils }].map((opt) => (
-                  <button key={opt.key} onClick={() => openAdd("meal", opt.key)} className="flex flex-col items-center gap-1.5">
-                    <div style={{ width: 62, height: 62, borderRadius: "50%", border: `2px dashed ${C.track}`, display: "flex", alignItems: "center", justifyContent: "center" }}><opt.icon size={20} color={C.inkSoft} /></div>
-                    <span className="ft-body" style={{ fontSize: 11, color: C.inkSoft, fontWeight: 500 }}>{opt.label}</span>
-                  </button>
-                ))}
-                <Ring size={78} stroke={7} pct={eatenPct} trackColor={C.track} fillColor={C.green}>
-                  <div className="flex flex-col items-center"><span className="ft-mono" style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>{remaining}</span><span className="ft-body" style={{ fontSize: 8.5, color: C.inkSoft }}>KCAL</span></div>
-                </Ring>
-              </div>
-            </div>
-
-            <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Log a workout</div>
-            <div className="p-4 mb-2" style={{ background: C.card, borderRadius: 24, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2.5">
-                  <div style={{ width: 42, height: 42, borderRadius: 14, background: C.blueTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Dumbbell size={19} color={C.blue} /></div>
-                  <div>
-                    <div className="ft-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink }}>{weekExercise.sessions} sessions</div>
-                    <div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>{weekExercise.volume} kg volume · last 7 days</div>
-                  </div>
-                </div>
-              </div>
-              <button onClick={() => openAdd("exercise")} className="w-full flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 13.5, fontWeight: 600 }}>
-                <Plus size={16} /> Log exercise
-              </button>
             </div>
           </>
         )}
@@ -1716,46 +1714,84 @@ export default function MealTracker() {
               </>
             ) : (
               <>
-                <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
-                  <div className="flex items-center gap-2 mb-2.5">
-                    <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.blueTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <BarChart3 size={15} color={C.blue} />
-                    </div>
-                    <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Weekly AI Review</span>
-                  </div>
-                  {weeklyReviewLoading ? (
-                    <div className="flex items-center gap-2 py-2">
-                      <Loader2 size={14} className="animate-spin" color={C.blue} />
-                      <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Analyzing this week…</span>
-                    </div>
-                  ) : weeklyReview && weeklyReview.weekStart === currentWeekStart ? (
-                    <>
-                      <div className="ft-body mb-2.5" style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.45 }}>{weeklyReview.summary}</div>
-                      {weeklyReview.focusNextWeek && (
-                        <div className="flex items-start gap-2 p-2.5 mb-2" style={{ background: C.orangeTint, borderRadius: 12 }}>
-                          <Sparkles size={13} color={C.orange} style={{ flexShrink: 0, marginTop: 1 }} />
-                          <span className="ft-body" style={{ fontSize: 12, color: C.ink, lineHeight: 1.4 }}><span style={{ fontWeight: 700 }}>Focus next week: </span>{weeklyReview.focusNextWeek}</span>
-                        </div>
-                      )}
-                      <button onClick={generateWeeklyReview} className="ft-body" style={{ fontSize: 11.5, color: C.blue, fontWeight: 600 }}>Refresh</button>
-                    </>
-                  ) : (
-                    <>
-                      <div className="ft-body mb-3" style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.4 }}>
-                        Reviews auto-generate every 7 days once there's enough logged data — or generate one now.
-                      </div>
-                      <button onClick={generateWeeklyReview} className="flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 12, fontWeight: 600 }}>
-                        <Sparkles size={13} />Generate this week's review
-                      </button>
-                    </>
-                  )}
-                  {weeklyReviewError && <div className="ft-body mt-2" style={{ fontSize: 11.5, color: C.pink }}>{weeklyReviewError}</div>}
-                </div>
-
                 <div className="flex gap-2 mb-4">
                   <Chip active={chartsPeriod === "week"} onClick={() => setChartsPeriod("week")} label="This week" />
                   <Chip active={chartsPeriod === "month"} onClick={() => setChartsPeriod("month")} label="This month" />
                 </div>
+
+                {chartsPeriod === "week" ? (
+                  <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                    <div className="flex items-center gap-2 mb-2.5">
+                      <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.blueTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <BarChart3 size={15} color={C.blue} />
+                      </div>
+                      <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Weekly AI Review</span>
+                    </div>
+                    {weeklyReviewLoading ? (
+                      <div className="flex items-center gap-2 py-2">
+                        <Loader2 size={14} className="animate-spin" color={C.blue} />
+                        <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Analyzing this week…</span>
+                      </div>
+                    ) : weeklyReview && weeklyReview.weekStart === currentWeekStart ? (
+                      <>
+                        <div className="ft-body mb-2.5" style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.45 }}>{weeklyReview.summary}</div>
+                        {weeklyReview.focusNextWeek && (
+                          <div className="flex items-start gap-2 p-2.5 mb-2" style={{ background: C.orangeTint, borderRadius: 12 }}>
+                            <Sparkles size={13} color={C.orange} style={{ flexShrink: 0, marginTop: 1 }} />
+                            <span className="ft-body" style={{ fontSize: 12, color: C.ink, lineHeight: 1.4 }}><span style={{ fontWeight: 700 }}>Focus next week: </span>{weeklyReview.focusNextWeek}</span>
+                          </div>
+                        )}
+                        <button onClick={generateWeeklyReview} className="ft-body" style={{ fontSize: 11.5, color: C.blue, fontWeight: 600 }}>Refresh</button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="ft-body mb-3" style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.4 }}>
+                          Reviews auto-generate every 7 days once there's enough logged data — or generate one now.
+                        </div>
+                        <button onClick={generateWeeklyReview} className="flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 12, fontWeight: 600 }}>
+                          <Sparkles size={13} />Generate this week's review
+                        </button>
+                      </>
+                    )}
+                    {weeklyReviewError && <div className="ft-body mt-2" style={{ fontSize: 11.5, color: C.pink }}>{weeklyReviewError}</div>}
+                  </div>
+                ) : (
+                  <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                    <div className="flex items-center gap-2 mb-2.5">
+                      <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.purpleTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <CalendarDays size={15} color={C.purple} />
+                      </div>
+                      <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Monthly AI Review</span>
+                    </div>
+                    {monthlyReviewLoading ? (
+                      <div className="flex items-center gap-2 py-2">
+                        <Loader2 size={14} className="animate-spin" color={C.purple} />
+                        <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Analyzing this month…</span>
+                      </div>
+                    ) : monthlyReview && monthlyReview.monthStart === currentMonthStart ? (
+                      <>
+                        <div className="ft-body mb-2.5" style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.45 }}>{monthlyReview.summary}</div>
+                        {monthlyReview.focusNextMonth && (
+                          <div className="flex items-start gap-2 p-2.5 mb-2" style={{ background: C.purpleTint, borderRadius: 12 }}>
+                            <Sparkles size={13} color={C.purple} style={{ flexShrink: 0, marginTop: 1 }} />
+                            <span className="ft-body" style={{ fontSize: 12, color: C.ink, lineHeight: 1.4 }}><span style={{ fontWeight: 700 }}>Focus next month: </span>{monthlyReview.focusNextMonth}</span>
+                          </div>
+                        )}
+                        <button onClick={generateMonthlyReview} className="ft-body" style={{ fontSize: 11.5, color: C.purple, fontWeight: 600 }}>Refresh</button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="ft-body mb-3" style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.4 }}>
+                          Reviews auto-generate every 30 days once there's enough logged data — or generate one now.
+                        </div>
+                        <button onClick={generateMonthlyReview} className="flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 12, fontWeight: 600 }}>
+                          <Sparkles size={13} />Generate this month's review
+                        </button>
+                      </>
+                    )}
+                    {monthlyReviewError && <div className="ft-body mt-2" style={{ fontSize: 11.5, color: C.pink }}>{monthlyReviewError}</div>}
+                  </div>
+                )}
                 <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Avg calories/day</span>
@@ -2437,7 +2473,15 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
   const [local, setLocal] = useState(goals);
   const [saved, setSaved] = useState(false);
   const [weightInput, setWeightInput] = useState("");
+  const [goalsEditing, setGoalsEditing] = useState(false);
+  const [exerciseSettingsOpen, setExerciseSettingsOpen] = useState(false);
   useEffect(() => setLocal(goals), [goals]);
+
+  function toggleGoalsEditing() {
+    if (goalsEditing) setLocal(goals); // discard any unsaved edits on cancel
+    setSaved(false);
+    setGoalsEditing((o) => !o);
+  }
 
   function field(key, label, unit) {
   return (
@@ -2498,11 +2542,40 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
       </button>
     </div>
 
-      <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Daily goals</div>
-      {field("calories", "Calories", "kcal")}{field("protein", "Protein", "g")}{field("carbs", "Carbohydrates", "g")}{field("fat", "Fat", "g")}{field("fiber", "Fiber", "g")}{field("water", "Water", "ml")}
-      {field("targetWeight", "Goal weight", "kg (0 = off)")}
-      <button onClick={async () => { await onSaveGoals(local); haptic("success"); setSaved(true); }} className="w-full flex items-center justify-center gap-2 py-3 rounded-full ft-body mb-6"
-        style={{ background: saved ? C.track : C.orange, color: saved ? C.ink : "#fff", fontSize: 14, fontWeight: 600 }}>{saved ? <><Check size={16} /> Saved</> : "Save goals"}</button>
+      <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 18 }}>
+        <div className="flex items-center justify-between mb-1">
+          <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Daily goals</span>
+          <button onClick={toggleGoalsEditing} className="flex items-center gap-1 ft-body" style={{ fontSize: 12, fontWeight: 600, color: goalsEditing ? C.inkSoft : C.orange }}>
+            {goalsEditing ? "Cancel" : <><Pencil size={12} /> Edit goals</>}
+          </button>
+        </div>
+
+        {!goalsEditing ? (
+          <div className="flex flex-wrap gap-x-4 gap-y-2 mt-3">
+            {[
+              { label: "Calories", value: `${goals.calories} kcal` },
+              { label: "Protein", value: `${goals.protein}g` },
+              { label: "Carbs", value: `${goals.carbs}g` },
+              { label: "Fat", value: `${goals.fat}g` },
+              { label: "Fiber", value: `${goals.fiber}g` },
+              { label: "Water", value: `${goals.water}ml` },
+              ...(goals.targetWeight > 0 ? [{ label: "Goal weight", value: `${goals.targetWeight}kg` }] : []),
+            ].map((g) => (
+              <div key={g.label}>
+                <div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>{g.label}</div>
+                <div className="ft-mono" style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{g.value}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-3">
+            {field("calories", "Calories", "kcal")}{field("protein", "Protein", "g")}{field("carbs", "Carbohydrates", "g")}{field("fat", "Fat", "g")}{field("fiber", "Fiber", "g")}{field("water", "Water", "ml")}
+            {field("targetWeight", "Goal weight", "kg (0 = off)")}
+            <button onClick={async () => { await onSaveGoals(local); haptic("success"); setSaved(true); setGoalsEditing(false); }} className="w-full flex items-center justify-center gap-2 py-3 rounded-full ft-body"
+              style={{ background: C.orange, color: "#fff", fontSize: 14, fontWeight: 600 }}>Save goals</button>
+          </div>
+        )}
+      </div>
 
       <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Weight</div>
       <div className="flex gap-2 mb-4">
@@ -2522,8 +2595,16 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
         </div>
       )}
 
-      <div className="ft-body mb-3 mt-6" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Workout split</div>
-      <WorkoutSplitEditor splits={splits} onSave={onSaveSplits} />
+      <button onClick={() => setExerciseSettingsOpen((o) => !o)} className="w-full flex items-center justify-between p-4 mt-6" style={{ background: C.card, borderRadius: 18 }}>
+        <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Exercise settings</span>
+        <ChevronDown size={16} color={C.inkSoft} style={{ transform: exerciseSettingsOpen ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
+      </button>
+      {exerciseSettingsOpen && (
+        <div className="mt-3">
+          <div className="ft-body mb-2 px-1" style={{ fontSize: 12, color: C.inkSoft }}>Workout split</div>
+          <WorkoutSplitEditor splits={splits} onSave={onSaveSplits} />
+        </div>
+      )}
     </div>
   );
 }
