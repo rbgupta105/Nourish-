@@ -85,5 +85,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: nourish-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: nourish-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
