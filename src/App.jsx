@@ -1325,28 +1325,37 @@ export default function MealTracker() {
 
 const handleGoogleSignIn = async () => {
   try {
-    // Android APK: use native Google Sign-In
+    // Android APK: Native Google Sign-In
+    // Firebase JS SDK handles the actual Firebase authentication
     if (window.Capacitor?.isNativePlatform?.()) {
       const result = await FirebaseAuthentication.signInWithGoogle({
-  useCredentialManager: false,
+        useCredentialManager: false,
+        skipNativeAuth: true,
       });
-      const credential = GoogleAuthProvider.credential(
-        result.credential?.idToken
-      );
+
+      const idToken = result.credential?.idToken;
+
+      if (!idToken) {
+        throw new Error("Google Sign-In did not return an ID token.");
+      }
+
+      const credential = GoogleAuthProvider.credential(idToken);
 
       await signInWithCredential(auth, credential);
       return;
     }
 
-    // Web browser: use Firebase popup
+    // Web browser: Firebase popup
     await signInWithPopup(auth, googleProvider);
   } catch (error) {
-  console.error("Google Sign-In Error:", error);
-  alert(
-    `Google Sign-In failed:\n${error?.code || "unknown"}\n${error?.message || "Unknown error"}`
-  );
-}
+    console.error("Google Sign-In Error:", error);
 
+    alert(
+      `Google Sign-In failed:\n${error?.code || "unknown"}\n${
+        error?.message || "Unknown error"
+      }`
+    );
+  }
 };
 
   const handleSignOut = async () => {
