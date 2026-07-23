@@ -422,9 +422,73 @@ function fileToBase64(file) {
 function haptic(kind = "light") {
   try {
     if (!("vibrate" in navigator)) return;
-    const patterns = { light: 12, success: [10, 40, 14], delete: [16, 30, 16] };
+    const patterns = { light: 12, success: [10, 40, 14], delete: [16, 30, 16], achievement: [14, 30, 14, 30, 22] };
     navigator.vibrate(patterns[kind] ?? 12);
   } catch { /* vibration not supported/allowed — ignore */ }
+}
+
+// ---------- Today's Status ----------
+// A single, immediately-readable read on "how am I doing today", blended from
+// where calories/protein currently sit vs. goal. Used by the dashboard's status
+// card so the app leads with an answer rather than a wall of numbers.
+function computeTodayStatus({ todayTotals, goals, todayLogs }) {
+  const calPct = goals.calories > 0 ? (todayTotals.calories / goals.calories) * 100 : 0;
+  const proPct = goals.protein > 0 ? (todayTotals.protein / goals.protein) * 100 : 0;
+  const remaining = Math.round(goals.calories - todayTotals.calories);
+
+  if (todayLogs.length === 0) {
+    return { level: "empty", emoji: "🍽️", label: "Nothing logged yet", color: C.inkSoft, bg: C.track, calPct, proPct, remaining };
+  }
+  if (calPct >= 90 && calPct <= 110 && proPct >= 90) {
+    return { level: "achieved", emoji: "🏆", label: "Goal achieved", color: C.green, bg: C.greenTint, calPct, proPct, remaining };
+  }
+  if (calPct > 115 || calPct < 55) {
+    return { level: "over", emoji: "🔴", label: calPct > 115 ? "Significantly over" : "Significantly under", color: C.pink, bg: C.pinkTint, calPct, proPct, remaining };
+  }
+  if (calPct < 80 || proPct < 60) {
+    return { level: "low", emoji: "🟡", label: "Slightly low", color: C.tan, bg: C.tanTint, calPct, proPct, remaining };
+  }
+  return { level: "onTrack", emoji: "🟢", label: "On track today", color: C.green, bg: C.greenTint, calPct, proPct, remaining };
+}
+
+// ---------- AI correction learning ----------
+// Remembers how a user's manual portion/calorie edits compare to what the AI
+// first estimated for a given food, keyed by a loose normalized food name. Fed
+// back into future prompts for that food so estimates gradually drift toward the
+// user's own typical portions instead of repeating the same miss.
+function normalizeFoodKey(name) {
+  return (name || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+function getPortionMemory(foodName) {
+  try {
+    const all = JSON.parse(localStorage.getItem("portion-memory") || "{}");
+    return all[normalizeFoodKey(foodName)] || null;
+  } catch { return null; }
+}
+function recordPortionCorrection(foodName, { aiPortion, userPortion, aiCalories, userCalories }) {
+  const key = normalizeFoodKey(foodName);
+  if (!key) return;
+  // Only worth remembering if the user actually changed something meaningfully.
+  const portionChanged = (aiPortion || "").trim().toLowerCase() !== (userPortion || "").trim().toLowerCase();
+  const caloriesChanged = aiCalories > 0 && Math.abs(userCalories - aiCalories) / aiCalories > 0.12;
+  if (!portionChanged && !caloriesChanged) return;
+  try {
+    const all = JSON.parse(localStorage.getItem("portion-memory") || "{}");
+    const existing = all[key] || { foodName, corrections: [] };
+    existing.foodName = foodName;
+    existing.corrections = [{ aiPortion, userPortion, aiCalories, userCalories, timestamp: Date.now() }, ...existing.corrections].slice(0, 5);
+    all[key] = existing;
+    localStorage.setItem("portion-memory", JSON.stringify(all));
+  } catch { /* storage full/unavailable — skip silently */ }
+}
+// Turns remembered corrections into a short prompt note, only once the same
+// food has been corrected more than once (so a single one-off edit doesn't
+// overfit the next estimate).
+function buildPortionMemoryNote(foodName) {
+  const mem = getPortionMemory(foodName);
+  if (!mem || mem.corrections.length < 2) return "";
+  const latest = mem.corrections[0];
+  return `\nNote: for "${mem.foodName}", this user has previously corrected the AI's estimate toward ${latest.userPortion || `~${Math.round(latest.userCalories)} kcal`} (from an initial estimate of ${latest.aiPortion || `~${Math.round(latest.aiCalories)} kcal`}) across ${mem.corrections.length} past logs. Lean toward the user's typical portion size for this food unless the current photo/description clearly indicates otherwise.`;
 }
 
 // ---------- Image compression ----------
@@ -460,7 +524,7 @@ function compressImageFile(file, { maxDimension = 1280, quality = 0.82 } = {}) {
   });
 }
 
-function buildMealPrompt({ mode, description, goals, todayTotals, todayLogs }) {
+function buildMealPrompt({ mode, description, goals, todayTotals, todayLogs, portionMemoryNote }) {
   const g = goals, t = todayTotals;
   const mealsText = (todayLogs && todayLogs.length)
     ? todayLogs.map((l) => `- ${l.food_name || "meal"} (${l.estimated_portion || "portion unspecified"}): ${Math.round(num(l.calories))} kcal, ${Math.round(num(l.protein_g))}g protein, ${Math.round(num(l.carbs_g))}g carbs, ${Math.round(num(l.fat_g))}g fat`).join("\n")
@@ -471,7 +535,7 @@ User's daily goals: ${g.calories} kcal, ${g.protein}g protein, ${g.carbs}g carbs
 Already logged today before this meal (totals): ${t.calories} kcal, ${t.protein}g protein, ${t.carbs}g carbs, ${t.fat}g fat.
 Individual meals logged today so far:
 ${mealsText}
-${mode === "text" ? `Meal description: "${description}"` : ""}
+${mode === "text" ? `Meal description: "${description}"` : ""}${portionMemoryNote || ""}
 
 Respond with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:
 {
@@ -486,11 +550,12 @@ Respond with ONLY valid JSON, no markdown fences, no commentary, in exactly this
   "sodium_mg": number,
   "micronutrients": [{"name": string, "amount": string, "percent_dv": number_or_null}],
   "confidence": "high" | "medium" | "low",
+  "estimate_basis": string,
   "portion_verdict": "decrease" | "keep" | "increase",
   "portion_change_percent": number,
   "portion_guidance": string
 }
-Give 3 to 6 notable micronutrients. Weigh both the remaining daily targets AND the composition of meals already logged today (e.g. flag it if today's meals are already carb-heavy or protein-light) when deciding portion_verdict. portion_change_percent is your best-guess recommended change to THIS portion, as a signed integer percent (e.g. -25 to shrink by a quarter, 0 to keep as-is, 15 to grow it) — it must be consistent with portion_verdict. Keep portion_guidance to one or two direct sentences, plain and specific, referencing what's driving the recommendation.`;
+Give 3 to 6 notable micronutrients. Weigh both the remaining daily targets AND the composition of meals already logged today (e.g. flag it if today's meals are already carb-heavy or protein-light) when deciding portion_verdict. portion_change_percent is your best-guess recommended change to THIS portion, as a signed integer percent (e.g. -25 to shrink by a quarter, 0 to keep as-is, 15 to grow it) — it must be consistent with portion_verdict. Keep portion_guidance to one or two direct sentences, plain and specific, referencing what's driving the recommendation. "estimate_basis" is one short plain sentence explaining what the confidence level is actually based on (e.g. visual portion size guesswork, ambiguous preparation method/oil content, a precisely-specified weight in the description) — this is shown to the user under "Why this estimate?" so it must be concrete and specific to this meal, not generic.`;
 }
 
 function buildPortionAdvicePrompt({ pending, goals, todayTotals, todayLogs }) {
@@ -749,6 +814,94 @@ function Ring({ size, stroke, pct, trackColor, fillColor, children }) {
   );
 }
 
+// ---------- Animated number counter ----------
+// Eases a number from its previous value to a new one over `duration`ms
+// whenever `value` changes, instead of snapping — used for the headline stats
+// (calories remaining, streak, score, macro totals) so updates feel alive.
+function AnimatedNumber({ value, duration = 600, decimals = 0 }) {
+  const [display, setDisplay] = useState(value);
+  const fromRef = useRef(value);
+  const rafRef = useRef(null);
+  useEffect(() => {
+    const from = fromRef.current;
+    const to = num(value);
+    if (from === to) { setDisplay(to); return; }
+    const start = performance.now();
+    cancelAnimationFrame(rafRef.current);
+    function tick(now) {
+      const t = clamp((now - start) / duration, 0, 1);
+      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      const current = from + (to - from) * eased;
+      setDisplay(current);
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+      else fromRef.current = to;
+    }
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  return <>{decimals > 0 ? display.toFixed(decimals) : Math.round(display)}</>;
+}
+
+// ---------- Micro-interaction keyframes ----------
+// Injected once at the app root. Covers: celebration banner slide-in, confetti
+// dots, a quick center-screen "pop" for lighter confirmations, and a brief
+// highlight flash used on freshly-logged rows.
+function MicroInteractionStyles() {
+  return (
+    <style>{`
+      @keyframes celebrateSlideIn { 0% { transform: translateY(-16px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }
+      @keyframes celebratePop { 0% { transform: scale(0.6); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+      @keyframes confettiFall { 0% { transform: translateY(-6px) rotate(0deg); opacity: 1; } 100% { transform: translateY(38px) rotate(180deg); opacity: 0; } }
+      @keyframes rowHighlight { 0% { background-color: var(--flash-color, rgba(238,108,55,0.18)); } 100% { background-color: transparent; } }
+      @keyframes checkPop { 0% { transform: scale(0); opacity: 0; } 50% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+      .anim-celebrate { animation: celebrateSlideIn .35s cubic-bezier(.22,.9,.34,1); }
+      .anim-pop { animation: celebratePop .4s cubic-bezier(.22,.9,.34,1); }
+      .anim-row-flash { animation: rowHighlight 1.1s ease-out; }
+      .anim-check-pop { animation: checkPop .45s cubic-bezier(.22,.9,.34,1); }
+    `}</style>
+  );
+}
+
+// Small centered icon "pop" used for lighter confirmations (meal logged, weight
+// updated, workout completed) — brief and unobtrusive, auto-dismisses itself.
+function MicroPulse({ pulse }) {
+  if (!pulse) return null;
+  const Icon = pulse.icon;
+  return (
+    <div className="absolute inset-0 flex items-center justify-center pointer-events-none" style={{ zIndex: 60 }}>
+      <div className="anim-pop flex items-center justify-center" style={{ width: 64, height: 64, borderRadius: "50%", background: pulse.bg, boxShadow: "0 8px 24px rgba(20,20,20,0.18)" }}>
+        <Icon size={28} color={pulse.color} />
+      </div>
+    </div>
+  );
+}
+
+// Bigger top-of-screen banner reserved for genuine milestones (streak up,
+// protein target reached, daily goal completed) — a few confetti dots for flavor.
+function CelebrationBanner({ celebrations, onDismiss }) {
+  if (!celebrations.length) return null;
+  return (
+    <div className="absolute left-4 right-4 flex flex-col gap-2" style={{ top: 8, zIndex: 60 }}>
+      {celebrations.map((c) => (
+        <div key={c.id} className="anim-celebrate flex items-center gap-2.5 p-3" style={{ position: "relative", overflow: "hidden", background: c.bg, borderRadius: 18, boxShadow: "0 8px 24px rgba(20,20,20,0.16)" }}>
+          {[0, 1, 2].map((i) => (
+            <div key={i} style={{
+              position: "absolute", top: 4, right: 14 + i * 10, width: 5, height: 5, borderRadius: "50%",
+              background: [C.orange, C.green, C.tan][i % 3], animation: `confettiFall .9s ease-out ${i * 0.12}s both`,
+            }} />
+          ))}
+          <div style={{ width: 34, height: 34, borderRadius: "50%", background: "rgba(255,255,255,0.55)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <c.icon size={16} color={c.color} />
+          </div>
+          <span className="ft-body flex-1" style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{c.text}</span>
+          <button onClick={() => onDismiss(c.id)} style={{ flexShrink: 0 }}><X size={13} color={C.inkSoft} /></button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Avatar({ initial, size = 46 }) {
   return (
     <div style={{ position: "relative", width: size, height: size }}>
@@ -783,6 +936,24 @@ function TrendBadge({ trend }) {
   return (
     <div className="flex items-center gap-1 px-2 py-0.5" style={{ background: m.bg, borderRadius: 20 }}>
       <m.icon size={11} color={m.color} />
+      <span className="ft-body" style={{ fontSize: 10.5, fontWeight: 600, color: m.color }}>{m.label}</span>
+    </div>
+  );
+}
+
+// Confidence pill for AI meal estimates — high/medium/low, color-coded so the
+// user can tell at a glance how much to trust the numbers before saving.
+function ConfidenceBadge({ level }) {
+  if (!level || level === "manual") return null;
+  const map = {
+    high: { color: C.green, bg: C.greenTint, label: "High confidence" },
+    medium: { color: C.tan, bg: C.tanTint, label: "Medium confidence" },
+    low: { color: C.pink, bg: C.pinkTint, label: "Low confidence" },
+  };
+  const m = map[level] || map.medium;
+  return (
+    <div className="flex items-center gap-1 px-2 py-0.5" style={{ background: m.bg, borderRadius: 20 }}>
+      <div style={{ width: 6, height: 6, borderRadius: "50%", background: m.color }} />
       <span className="ft-body" style={{ fontSize: 10.5, fontWeight: 600, color: m.color }}>{m.label}</span>
     </div>
   );
@@ -873,7 +1044,9 @@ function MacroPill({ icon: Icon, iconBg, iconColor, label, value, unit, pct }) {
         </div>
       )}
       <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 500 }}>{label}</span>
-      <span className="ft-display" style={{ fontSize: 16, fontWeight: 700, color: C.green }}>{value}{unit}</span>
+      <span className="ft-display" style={{ fontSize: 16, fontWeight: 700, color: C.green }}>
+        {typeof value === "number" ? <AnimatedNumber value={value} decimals={Number.isInteger(value) ? 0 : 1} /> : value}{unit}
+      </span>
     </div>
   );
 }
@@ -893,6 +1066,66 @@ function Chip({ active, onClick, label }) {
       style={{ background: active ? C.ink : C.card, color: active ? C.onInk : C.inkSoft, fontSize: 12.5, fontWeight: 600 }}>
       {label}
     </button>
+  );
+}
+
+// ---------- Swipeable / long-press row ----------
+// Wraps a log row (meal or exercise) so it can be swiped left to reveal quick
+// actions (Edit / Duplicate / Delete), or long-pressed for the same menu — a
+// lighter-weight alternative to always-visible icon buttons on touch devices.
+// Tapping the row content (or anywhere else) while open closes it again.
+function SwipeRow({ children, onEdit, onDuplicate, onDelete, actionWidth = 132 }) {
+  const [dragX, setDragX] = useState(0);
+  const [open, setOpen] = useState(false);
+  const dragStartX = useRef(null);
+  const draggingRef = useRef(false);
+  const longPressTimer = useRef(null);
+
+  function openActions() { setDragX(-actionWidth); setOpen(true); }
+  function closeActions() { setDragX(0); setOpen(false); }
+
+  function onTouchStart(e) {
+    dragStartX.current = e.touches[0].clientX;
+    draggingRef.current = false;
+    longPressTimer.current = setTimeout(() => {
+      if (!draggingRef.current) { haptic("light"); openActions(); }
+    }, 500);
+  }
+  function onTouchMove(e) {
+    if (dragStartX.current == null) return;
+    const dx = e.touches[0].clientX - dragStartX.current;
+    if (Math.abs(dx) > 6) { draggingRef.current = true; clearTimeout(longPressTimer.current); }
+    const base = open ? -actionWidth : 0;
+    setDragX(clamp(base + dx, -actionWidth, 0));
+  }
+  function onTouchEnd() {
+    clearTimeout(longPressTimer.current);
+    dragStartX.current = null;
+    if (dragX < -actionWidth / 2) { openActions(); if (!open) haptic("light"); }
+    else closeActions();
+  }
+
+  return (
+    <div className="relative" style={{ overflow: "hidden", borderRadius: 18 }}>
+      <div className="absolute inset-y-0 right-0 flex items-stretch" style={{ width: actionWidth }}>
+        {onEdit && (
+          <button onClick={() => { closeActions(); onEdit(); }} className="flex-1 flex items-center justify-center" style={{ background: C.blue }}><Pencil size={15} color="#fff" /></button>
+        )}
+        {onDuplicate && (
+          <button onClick={() => { closeActions(); onDuplicate(); }} className="flex-1 flex items-center justify-center" style={{ background: C.tan }}><Copy size={15} color="#fff" /></button>
+        )}
+        {onDelete && (
+          <button onClick={() => { closeActions(); onDelete(); }} className="flex-1 flex items-center justify-center" style={{ background: C.pink }}><Trash2 size={15} color="#fff" /></button>
+        )}
+      </div>
+      <div
+        onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+        onClick={() => { if (open) closeActions(); }}
+        style={{ transform: `translateX(${dragX}px)`, transition: dragStartX.current == null ? "transform .25s cubic-bezier(.22,.9,.34,1)" : "none", touchAction: "pan-y" }}
+      >
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -1054,19 +1287,36 @@ export default function MealTracker() {
   // reloads persisted data past the threshold.
   const scrollRef = useRef(null);
   const pullStartY = useRef(null);
+  const swipeStart = useRef(null); // { x, y } — tracked independently of the vertical pull gesture
   const [pullDistance, setPullDistance] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const PULL_THRESHOLD = 64;
+  // Which day the Home dashboard is showing: 0 = today, 1 = yesterday, etc.
+  // Swiping left/right between days is Home-only and read-only for past days.
+  const [dashDayOffset, setDashDayOffset] = useState(0);
   const onPullTouchStart = (e) => {
     pullStartY.current = scrollRef.current && scrollRef.current.scrollTop === 0 && !refreshing ? e.touches[0].clientY : null;
+    swipeStart.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
   };
   const onPullTouchMove = (e) => {
     if (pullStartY.current == null) return;
     const delta = e.touches[0].clientY - pullStartY.current;
     if (delta > 0) setPullDistance(Math.min(delta * 0.45, 80));
   };
-  const onPullTouchEnd = async () => {
-    if (pullStartY.current == null) return;
+  const onPullTouchEnd = async (e) => {
+    if (swipeStart.current != null && tab === "home") {
+      const touch = (e.changedTouches && e.changedTouches[0]) || null;
+      if (touch) {
+        const dx = touch.clientX - swipeStart.current.x;
+        const dy = touch.clientY - swipeStart.current.y;
+        if (Math.abs(dx) > 56 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+          haptic("light");
+          setDashDayOffset((o) => (dx < 0 ? Math.min(o + 1, 60) : Math.max(o - 1, 0)));
+        }
+      }
+    }
+    swipeStart.current = null;
+    if (pullStartY.current == null) { setPullDistance(0); return; }
     pullStartY.current = null;
     if (pullDistance > PULL_THRESHOLD) {
       setRefreshing(true);
@@ -1083,6 +1333,20 @@ export default function MealTracker() {
     calories: acc.calories + num(l.calories), protein: acc.protein + num(l.protein_g),
     carbs: acc.carbs + num(l.carbs_g), fat: acc.fat + num(l.fat_g), fiber: acc.fiber + num(l.fiber_g),
   }), { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 }), [todayLogs]);
+
+  // ---------- Home dashboard "viewed day" (swipe left/right between days) ----------
+  // Read-only: swiping the Home dashboard changes which day's totals it shows,
+  // without touching what "today" means anywhere else (water logging, the AI
+  // daily coach, the floating + button all always act on the real today).
+  const viewedDate = useMemo(() => daysAgo(dashDayOffset), [dashDayOffset]);
+  const viewedIsToday = dashDayOffset === 0;
+  const viewedLogs = useMemo(() => (viewedIsToday ? todayLogs : logs.filter((l) => l.date === viewedDate)), [viewedIsToday, todayLogs, logs, viewedDate]);
+  const viewedExerciseLogs = useMemo(() => (viewedIsToday ? todayExerciseLogs : exerciseLogs.filter((e) => e.date === viewedDate)), [viewedIsToday, todayExerciseLogs, exerciseLogs, viewedDate]);
+  const viewedTotals = useMemo(() => (viewedIsToday ? todayTotals : viewedLogs.reduce((acc, l) => ({
+    calories: acc.calories + num(l.calories), protein: acc.protein + num(l.protein_g),
+    carbs: acc.carbs + num(l.carbs_g), fat: acc.fat + num(l.fat_g), fiber: acc.fiber + num(l.fiber_g),
+  }), { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 })), [viewedIsToday, todayTotals, viewedLogs]);
+  const viewedWater = useMemo(() => (viewedIsToday ? null : waterLogs.filter((w) => w.date === viewedDate).reduce((s, w) => s + num(w.ml), 0)), [viewedIsToday, waterLogs, viewedDate]);
 
   // Most-recently-eaten distinct meals (by name), for one-tap re-log alongside favorites.
   const recentMeals = useMemo(() => {
@@ -1192,6 +1456,75 @@ export default function MealTracker() {
   const mealDates = useMemo(() => new Set(logs.map((l) => l.date)), [logs]);
   const exerciseDates = useMemo(() => new Set(exerciseLogs.map((e) => e.date)), [exerciseLogs]);
   const personalRecords = useMemo(() => computePersonalRecords(exerciseLogs), [exerciseLogs]);
+  const todayStatus = useMemo(() => computeTodayStatus({ todayTotals, goals, todayLogs }), [todayTotals, goals, todayLogs]);
+  const viewedStatus = useMemo(() => (viewedIsToday ? todayStatus : computeTodayStatus({ todayTotals: viewedTotals, goals, todayLogs: viewedLogs })), [viewedIsToday, todayStatus, viewedTotals, goals, viewedLogs]);
+
+  // ---------- Micro-interactions: celebrations + pulses ----------
+  // Two tiers: `pulse` is a brief centered icon for routine confirmations (meal
+  // logged, weight updated, workout completed); `celebrations` is a dismissible
+  // top banner reserved for milestones (streak up, protein target hit, daily
+  // goal completed). Achievement crossings are detected by comparing against a
+  // ref of the previous value so they fire once, right when the threshold is
+  // crossed, not on every render.
+  const [justAddedId, setJustAddedId] = useState(null);
+  const [pulse, setPulse] = useState(null);
+  const pulseTimerRef = useRef(null);
+  function firePulse(kind) {
+    const defs = {
+      meal: { icon: Utensils, color: C.orange, bg: C.orangeTint },
+      weight: { icon: TrendingUp, color: C.blue, bg: C.blueTint },
+      workout: { icon: Dumbbell, color: C.blue, bg: C.blueTint },
+    };
+    clearTimeout(pulseTimerRef.current);
+    setPulse(defs[kind] || defs.meal);
+    pulseTimerRef.current = setTimeout(() => setPulse(null), 700);
+  }
+  const [celebrations, setCelebrations] = useState([]);
+  function fireCelebration(c) {
+    haptic("achievement");
+    const id = uid();
+    setCelebrations((cs) => [...cs, { id, ...c }]);
+    setTimeout(() => setCelebrations((cs) => cs.filter((x) => x.id !== id)), 3200);
+  }
+  function dismissCelebration(id) { setCelebrations((cs) => cs.filter((x) => x.id !== id)); }
+
+  // Guards against firing achievement celebrations while historical data is
+  // first loading in (e.g. an existing 5-day streak shouldn't "celebrate" on open).
+  const justLoadedRef = useRef(true);
+  useEffect(() => {
+    if (!ready) return;
+    const t = setTimeout(() => { justLoadedRef.current = false; }, 1000);
+    return () => clearTimeout(t);
+  }, [ready]);
+
+  const prevStreakRef = useRef(streak);
+  useEffect(() => {
+    if (ready && !justLoadedRef.current && streak > prevStreakRef.current) {
+      fireCelebration({ icon: Trophy, color: C.pink, bg: C.pinkTint, text: `🔥 ${streak}-day streak!` });
+    }
+    prevStreakRef.current = streak;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streak, ready]);
+
+  const prevProteinHitRef = useRef(false);
+  useEffect(() => {
+    const hit = goals.protein > 0 && todayTotals.protein >= goals.protein;
+    if (ready && !justLoadedRef.current && hit && !prevProteinHitRef.current) {
+      fireCelebration({ icon: Dumbbell, color: C.purple, bg: C.purpleTint, text: "💪 Protein target reached!" });
+    }
+    prevProteinHitRef.current = hit;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayTotals.protein, goals.protein, ready]);
+
+  const prevGoalHitRef = useRef(false);
+  useEffect(() => {
+    const hit = todayStatus.level === "achieved";
+    if (ready && !justLoadedRef.current && hit && !prevGoalHitRef.current) {
+      fireCelebration({ icon: Trophy, color: C.green, bg: C.greenTint, text: "🏆 Daily goal completed!" });
+    }
+    prevGoalHitRef.current = hit;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayStatus.level, ready]);
 
   // ---------- Smart notifications ----------
   const [dismissedNotifications, setDismissedNotifications] = useState([]);
@@ -1296,9 +1629,14 @@ export default function MealTracker() {
   const initial = trimmedName ? trimmedName[0].toUpperCase() : "U";
   const eatenPct = goals.calories > 0 ? (todayTotals.calories / goals.calories) * 100 : 0;
   const remaining = Math.max(0, Math.round(goals.calories - todayTotals.calories));
+  const viewedEatenPct = goals.calories > 0 ? (viewedTotals.calories / goals.calories) * 100 : 0;
+  const viewedRemaining = Math.max(0, Math.round(goals.calories - viewedTotals.calories));
 
   return (
     <div className="flex flex-col relative" style={{ height: 700, maxHeight: "100vh", background: `linear-gradient(180deg, ${C.bgTop} 0%, ${C.bgBottom} 100%)`, overflow: "hidden" }}>
+      <MicroInteractionStyles />
+      <MicroPulse pulse={pulse} />
+      <CelebrationBanner celebrations={celebrations} onDismiss={dismissCelebration} />
             <div ref={scrollRef} onTouchStart={onPullTouchStart} onTouchMove={onPullTouchMove} onTouchEnd={onPullTouchEnd}
               className="flex-1 overflow-y-auto px-4 pt-5" style={{ paddingBottom: 90 }}>
 
@@ -1352,35 +1690,67 @@ export default function MealTracker() {
 
         {tab === "home" && (
           <>
+            {/* Day switcher — swipe left/right anywhere on Home, or tap the arrows */}
+            <div className="flex items-center justify-between mb-3 px-1">
+              <button onClick={() => setDashDayOffset((o) => Math.min(o + 1, 60))} className="flex items-center justify-center" style={{ width: 28, height: 28, borderRadius: "50%", background: C.card }}><ChevronLeft size={15} color={C.ink} /></button>
+              <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.inkSoft }}>
+                {viewedIsToday ? "Today" : dashDayOffset === 1 ? "Yesterday" : fmtDate(viewedDate)}
+              </span>
+              <button onClick={() => setDashDayOffset((o) => Math.max(o - 1, 0))} disabled={viewedIsToday} className="flex items-center justify-center" style={{ width: 28, height: 28, borderRadius: "50%", background: C.card, opacity: viewedIsToday ? 0.35 : 1 }}><ChevronRight size={15} color={C.ink} /></button>
+            </div>
+
+            {/* Today's Status — the app's one-glance answer to "how am I doing today" */}
+            <div className="p-4 mb-4" style={{ background: viewedStatus.bg, borderRadius: 22, transition: "background .3s ease" }}>
+              <div className="flex items-center justify-between">
+                <span className="ft-display" style={{ fontSize: 15.5, fontWeight: 700, color: C.ink }}>{viewedStatus.emoji} {viewedStatus.label}</span>
+                {viewedStatus.level === "achieved" && <Trophy size={17} color={viewedStatus.color} />}
+              </div>
+              {viewedStatus.level !== "empty" && (
+                <>
+                  <div className="ft-body mt-1" style={{ fontSize: 12.5, color: C.ink, opacity: 0.85 }}>
+                    Protein: <AnimatedNumber value={viewedStatus.proPct} />% • Calories: <AnimatedNumber value={viewedStatus.calPct} />%
+                  </div>
+                  <div className="ft-mono mt-0.5" style={{ fontSize: 12, color: C.ink, opacity: 0.7 }}>
+                    {viewedStatus.remaining >= 0 ? <><AnimatedNumber value={viewedStatus.remaining} /> kcal remaining</> : <><AnimatedNumber value={Math.abs(viewedStatus.remaining)} /> kcal over</>}
+                  </div>
+                </>
+              )}
+            </div>
+
             <div className="p-5 mb-4" style={{ background: C.card, borderRadius: 28, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
               <div className="flex items-center justify-between">
-                <Ring size={190} stroke={16} pct={eatenPct} trackColor={C.track} fillColor={C.orange}>
+                <Ring size={190} stroke={16} pct={viewedEatenPct} trackColor={C.track} fillColor={C.orange}>
                   <div className="flex flex-col items-center">
-                    <span className="ft-display" style={{ fontSize: 34, fontWeight: 700, color: C.ink }}>{remaining}</span>
+                    <span className="ft-display" style={{ fontSize: 34, fontWeight: 700, color: C.ink }}><AnimatedNumber value={viewedRemaining} /></span>
                     <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 500 }}>kcal left</span>
                   </div>
                 </Ring>
                 <div className="flex flex-col gap-4 pl-2">
                   <div className="flex items-center gap-2.5">
                     <div style={{ width: 34, height: 34, borderRadius: 10, background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Flame size={16} color={C.orange} /></div>
-                    <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{Math.round(todayTotals.calories)}</div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>/ {goals.calories} kcal goal</div></div>
+                    <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}><AnimatedNumber value={viewedTotals.calories} /></div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>/ {goals.calories} kcal goal</div></div>
                   </div>
                   <div className="flex items-center gap-2.5">
                     <div style={{ width: 34, height: 34, borderRadius: 10, background: C.greenTint, display: "flex", alignItems: "center", justifyContent: "center" }}><ClipboardList size={16} color={C.green} /></div>
-                    <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{todayLogs.length}</div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>meals logged</div></div>
+                    <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{viewedLogs.length}</div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>meals logged</div></div>
                   </div>
                   <div className="flex items-center gap-2.5">
                     <div style={{ width: 34, height: 34, borderRadius: 10, background: C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Trophy size={16} color={C.pink} /></div>
-                    <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{streak}</div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>day streak</div></div>
+                    <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}><AnimatedNumber value={streak} /></div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>day streak</div></div>
                   </div>
                 </div>
               </div>
             </div>
 
+            <div className="flex gap-2.5 mb-2.5">
+              <MacroPill icon={Dumbbell} iconBg={C.purpleTint} iconColor={C.purple} label="Protein" value={Math.round(viewedTotals.protein)} unit="g" pct={goals.protein > 0 ? (viewedTotals.protein / goals.protein) * 100 : 0} />
+              <MacroPill icon={Wheat} iconBg={C.tanTint} iconColor={C.tan} label="Carbs" value={Math.round(viewedTotals.carbs)} unit="g" pct={goals.carbs > 0 ? (viewedTotals.carbs / goals.carbs) * 100 : 0} />
+              <MacroPill icon={Droplet} iconBg={C.pinkTint} iconColor={C.pink} label="Fat" value={Math.round(viewedTotals.fat)} unit="g" pct={goals.fat > 0 ? (viewedTotals.fat / goals.fat) * 100 : 0} />
+            </div>
             <div className="flex gap-2.5 mb-4">
-              <MacroPill icon={Dumbbell} iconBg={C.purpleTint} iconColor={C.purple} label="Protein" value={Math.round(todayTotals.protein)} unit="g" pct={goals.protein > 0 ? (todayTotals.protein / goals.protein) * 100 : 0} />
-              <MacroPill icon={Wheat} iconBg={C.tanTint} iconColor={C.tan} label="Carbs" value={Math.round(todayTotals.carbs)} unit="g" pct={goals.carbs > 0 ? (todayTotals.carbs / goals.carbs) * 100 : 0} />
-              <MacroPill icon={Droplet} iconBg={C.pinkTint} iconColor={C.pink} label="Fat" value={Math.round(todayTotals.fat)} unit="g" pct={goals.fat > 0 ? (todayTotals.fat / goals.fat) * 100 : 0} />
+              <MacroPill icon={Droplets} iconBg={C.blueTint} iconColor={C.blue} label="Water" value={Math.round((viewedIsToday ? todayWater : viewedWater) / 1000 * 10) / 10} unit="L" pct={goals.water > 0 ? ((viewedIsToday ? todayWater : viewedWater) / goals.water) * 100 : 0} />
+              <MacroPill icon={Dumbbell} iconBg={C.greenTint} iconColor={C.green} label="Workout" value={viewedExerciseLogs.length > 0 ? "Done" : "Rest"} unit="" pct={viewedExerciseLogs.length > 0 ? 100 : 0} />
+              <div style={{ flex: 1 }} />
             </div>
 
             <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 22, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
@@ -1391,13 +1761,20 @@ export default function MealTracker() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline gap-1.5">
                     <span className="ft-display" style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>Today's Nutrition Score</span>
-                    <span className="ft-mono" style={{ fontSize: 14, fontWeight: 700, color: nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink }}>{nutritionScore.total}/100</span>
+                    <span className="ft-mono" style={{ fontSize: 14, fontWeight: 700, color: nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink }}><AnimatedNumber value={nutritionScore.total} />/100</span>
                   </div>
                   <div className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4, marginTop: 1 }}>{nutritionScore.summary}</div>
                 </div>
               </div>
             </div>
 
+            {!viewedIsToday ? (
+              <div className="p-4 mb-6 flex items-center gap-2.5" style={{ background: C.card, borderRadius: 22, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+                <CalendarDays size={16} color={C.inkSoft} />
+                <span className="ft-body flex-1" style={{ fontSize: 12.5, color: C.inkSoft }}>Viewing {fmtDate(viewedDate)}'s log. Water tracking and the AI coach only run for today.</span>
+                <button onClick={() => setDashDayOffset(0)} className="ft-body flex-shrink-0" style={{ fontSize: 12, color: C.orange, fontWeight: 600 }}>Back to today</button>
+              </div>
+            ) : (
             <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 22, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
               <div className="flex items-center justify-between mb-2.5">
                 <div className="flex items-center gap-2">
@@ -1409,14 +1786,16 @@ export default function MealTracker() {
               <div className="flex items-center gap-2">
                 <div className="flex-1 flex gap-1">
                   {Array.from({ length: Math.max(1, Math.round(goals.water / 250)) }).map((_, i) => (
-                    <div key={i} style={{ flex: 1, height: 10, borderRadius: 4, background: i < Math.round(todayWater / 250) ? C.blue : C.track }} />
+                    <div key={i} style={{ flex: 1, height: 10, borderRadius: 4, background: i < Math.round(todayWater / 250) ? C.blue : C.track, transition: "background .3s ease" }} />
                   ))}
                 </div>
                 <button onClick={removeLastWater} disabled={todayWater === 0} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.bgBottom, opacity: todayWater === 0 ? 0.4 : 1, flexShrink: 0 }}><Minus size={14} color={C.inkSoft} /></button>
                 <button onClick={() => addWater(250)} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.blueTint, flexShrink: 0 }}><Plus size={14} color={C.blue} /></button>
               </div>
             </div>
+            )}
 
+            {viewedIsToday && (
             <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 22, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
               <div className="flex items-center gap-2 mb-2.5">
                 <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.purpleTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -1455,6 +1834,7 @@ export default function MealTracker() {
               )}
               {coachError && <div className="ft-body mt-2" style={{ fontSize: 11.5, color: C.pink }}>{coachError}</div>}
             </div>
+            )}
           </>
         )}
 
@@ -1477,23 +1857,22 @@ export default function MealTracker() {
                 return <EmptyState icon={Utensils} text={logsDateFilter ? "No meals logged on this day." : "Nothing logged yet. Tap the orange + button to add your first meal."} />;
               }
               const renderMeal = (l) => (
-                <div className="flex items-center justify-between p-3.5" style={{ background: C.card, borderRadius: 18, boxShadow: "0 1px 4px rgba(20,20,20,0.05)", height: "100%", boxSizing: "border-box" }}>
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div style={{ width: 38, height: 38, borderRadius: "50%", background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Utensils size={15} color={C.orange} /></div>
-                    <div className="min-w-0">
-                      <div className="ft-body" style={{ fontSize: 14, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.food_name}</div>
-                      <div className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>{fmtDateTime(l.timestamp)} · {Math.round(l.calories)} kcal · P{Math.round(l.protein_g)} C{Math.round(l.carbs_g)} F{Math.round(l.fat_g)}</div>
+                <SwipeRow onEdit={() => openEdit("meal", l)} onDuplicate={() => duplicateLog(l)} onDelete={() => deleteLog(l.id)}>
+                  <div className={"flex items-center justify-between p-3.5" + (l.id === justAddedId ? " anim-row-flash" : "")} style={{ background: C.card, borderRadius: 18, boxShadow: "0 1px 4px rgba(20,20,20,0.05)", height: "100%", boxSizing: "border-box" }}>
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div style={{ width: 38, height: 38, borderRadius: "50%", background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Utensils size={15} color={C.orange} /></div>
+                      <div className="min-w-0">
+                        <div className="ft-body" style={{ fontSize: 14, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.food_name}</div>
+                        <div className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>{fmtDateTime(l.timestamp)} · {Math.round(l.calories)} kcal · P{Math.round(l.protein_g)} C{Math.round(l.carbs_g)} F{Math.round(l.fat_g)}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-0.5 flex-shrink-0">
+                      <button onClick={() => toggleFavorite(l)} className="p-2" title="Favorite">
+                        <Star size={14} color={C.tan} fill={favorites.some((f) => (f.food_name || "").trim().toLowerCase() === (l.food_name || "").trim().toLowerCase()) ? C.tan : "none"} />
+                      </button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-0.5 flex-shrink-0">
-                    <button onClick={() => toggleFavorite(l)} className="p-2" title="Favorite">
-                      <Star size={14} color={C.tan} fill={favorites.some((f) => (f.food_name || "").trim().toLowerCase() === (l.food_name || "").trim().toLowerCase()) ? C.tan : "none"} />
-                    </button>
-                    <button onClick={() => openEdit("meal", l)} className="p-2" title="Edit"><Pencil size={14} color={C.inkSoft} /></button>
-                    <button onClick={() => duplicateLog(l)} className="p-2" title="Duplicate"><Copy size={14} color={C.inkSoft} /></button>
-                    <button onClick={() => deleteLog(l.id)} className="p-2" title="Delete"><Trash2 size={14} color={C.pink} /></button>
-                  </div>
-                </div>
+                </SwipeRow>
               );
               // Hundreds of entries render efficiently via windowing; short lists use
               // the normal flow layout so they don't get boxed into a fixed height.
@@ -1528,7 +1907,8 @@ export default function MealTracker() {
                     const volume = e.type === "strength" ? e.sets.reduce((s, x) => s + num(x.weight) * num(x.reps), 0) : 0;
                     const overload = computeProgressiveOverload(e, exerciseLogs.filter((x) => x.timestamp < e.timestamp));
                     return (
-                      <div key={e.id} className="p-3.5" style={{ background: C.card, borderRadius: 18, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                      <SwipeRow key={e.id} onEdit={() => openEdit("exercise", e)} onDuplicate={() => duplicateExercise(e)} onDelete={() => deleteExercise(e.id)}>
+                      <div className={"p-3.5" + (e.id === justAddedId ? " anim-row-flash" : "")} style={{ background: C.card, borderRadius: 18, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3 min-w-0">
                             <div style={{ width: 38, height: 38, borderRadius: "50%", background: C.blueTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -1552,11 +1932,6 @@ export default function MealTracker() {
                               )}
                             </div>
                           </div>
-                          <div className="flex items-center gap-0.5 flex-shrink-0">
-                            <button onClick={() => openEdit("exercise", e)} className="p-2" title="Edit"><Pencil size={14} color={C.inkSoft} /></button>
-                            <button onClick={() => duplicateExercise(e)} className="p-2" title="Duplicate"><Copy size={14} color={C.inkSoft} /></button>
-                            <button onClick={() => deleteExercise(e.id)} className="p-2" title="Delete"><Trash2 size={14} color={C.pink} /></button>
-                          </div>
                         </div>
                         {e.ai && (
                           <div className="mt-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.line}` }}>
@@ -1568,6 +1943,7 @@ export default function MealTracker() {
                           </div>
                         )}
                       </div>
+                      </SwipeRow>
                     );
                   })}
                 </div>
@@ -1860,6 +2236,7 @@ export default function MealTracker() {
         weight: w,
       };
       haptic("success");
+      firePulse("weight");
       await persistWeights([
         entry,
         ...weights.filter((x) => x.date !== todayStr()),
@@ -1911,6 +2288,7 @@ export default function MealTracker() {
             const next = exists ? logs.map((l) => (l.id === entry.id ? entry : l)) : [entry, ...logs];
             await persistLogs(next);
             haptic("success");
+            if (!exists) { firePulse("meal"); setJustAddedId(entry.id); setTimeout(() => setJustAddedId(null), 1200); }
             setShowAdd(false); setEditingEntry(null);
           }}
           onSaveExercise={async (entry) => {
@@ -1918,6 +2296,7 @@ export default function MealTracker() {
             const next = exists ? exerciseLogs.map((x) => (x.id === entry.id ? entry : x)) : [entry, ...exerciseLogs];
             await persistExercise(next);
             haptic("success");
+            if (!exists) { firePulse("workout"); setJustAddedId(entry.id); setTimeout(() => setJustAddedId(null), 1200); }
             setShowAdd(false); setEditingEntry(null);
           }}
         />
@@ -1965,7 +2344,7 @@ function AddLogSheet({ initialLogType, initialMode, goals, todayTotals, todayLog
   );
 }
 
-const EMPTY_MEAL = { food_name: "", estimated_portion: "", calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, sugar_g: 0, sodium_mg: 0, micronutrients: [], confidence: "manual", portion_verdict: null, portion_change_percent: 0, portion_guidance: "" };
+const EMPTY_MEAL = { food_name: "", estimated_portion: "", calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, sugar_g: 0, sodium_mg: 0, micronutrients: [], confidence: "manual", estimate_basis: "", portion_verdict: null, portion_change_percent: 0, portion_guidance: "" };
 
 function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorites, recentMeals, onToggleFavorite, editingEntry }) {
   const [mode, setMode] = useState(initialMode === "manual" ? "text" : initialMode);
@@ -2005,7 +2384,9 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     if (mode === "text" && descriptionToUse.trim().length < 2) { setError("Describe what you ate first."); return; }
     setAnalyzing(true);
     try {
-      const promptText = buildMealPrompt({ mode, description: descriptionToUse, goals, todayTotals, todayLogs });
+      const foodGuess = mode === "text" ? descriptionToUse : "";
+      const portionMemoryNote = buildPortionMemoryNote(foodGuess);
+      const promptText = buildMealPrompt({ mode, description: descriptionToUse, goals, todayTotals, todayLogs, portionMemoryNote });
       const blocks = mode === "photo"
         ? [{ type: "image", source: { type: "base64", media_type: imagePreview.mediaType, data: imagePreview.b64 } }, { type: "text", text: promptText }]
         : [{ type: "text", text: promptText }];
@@ -2019,14 +2400,17 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
         fiber_g: num(parsed.fiber_g), sugar_g: num(parsed.sugar_g), sodium_mg: num(parsed.sodium_mg),
         micronutrients: Array.isArray(parsed.micronutrients) ? parsed.micronutrients : [],
         confidence: parsed.confidence || "medium",
+        estimate_basis: parsed.estimate_basis || "",
         portion_verdict: parsed.portion_verdict || "keep", portion_change_percent: num(parsed.portion_change_percent),
         portion_guidance: parsed.portion_guidance || "",
       });
       setLastCalculatedPortion(estimatedPortion);
+      setAiEstimate({ portion: estimatedPortion, calories: num(parsed.calories) });
     } catch (e) {
       setError((e && e.message ? e.message : "Couldn't analyze that meal") + " — enter it manually below.");
       setPending({ ...EMPTY_MEAL, food_name: mode === "text" ? descriptionToUse : "Logged meal" });
       setLastCalculatedPortion("");
+      setAiEstimate(null);
     } finally { setAnalyzing(false); }
   }
 
@@ -2093,6 +2477,11 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   const [lastCalculatedPortion, setLastCalculatedPortion] = useState(editingEntry ? (editingEntry.estimated_portion || "") : "");
   const [recalculating, setRecalculating] = useState(false);
   const portionIsStale = !!pending && pending.estimated_portion !== lastCalculatedPortion;
+  // The AI's original estimate for the current pending meal (portion + calories),
+  // captured right after analyze()/recalculateFromPortion() — compared against
+  // whatever the user actually saves so repeated corrections can be learned from.
+  const [aiEstimate, setAiEstimate] = useState(null);
+  const [showWhyEstimate, setShowWhyEstimate] = useState(false);
 
   function updateField(key, value) { setPending((p) => ({ ...p, [key]: key === "food_name" || key === "estimated_portion" ? value : num(value) })); }
 
@@ -2101,7 +2490,8 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     setError(null); setRecalculating(true);
     try {
       const description2 = `${pending.food_name}${pending.estimated_portion ? ` — portion: ${pending.estimated_portion}` : ""}`;
-      const promptText = buildMealPrompt({ mode: "text", description: description2, goals, todayTotals, todayLogs });
+      const portionMemoryNote = buildPortionMemoryNote(pending.food_name);
+      const promptText = buildMealPrompt({ mode: "text", description: description2, goals, todayTotals, todayLogs, portionMemoryNote });
       const raw = await callGemini([{ type: "text", text: promptText }]);
       const parsed = parseJSON(raw);
       setPending((p) => ({
@@ -2111,10 +2501,12 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
         fiber_g: num(parsed.fiber_g), sugar_g: num(parsed.sugar_g), sodium_mg: num(parsed.sodium_mg),
         micronutrients: Array.isArray(parsed.micronutrients) ? parsed.micronutrients : p.micronutrients,
         confidence: parsed.confidence || p.confidence,
+        estimate_basis: parsed.estimate_basis || p.estimate_basis,
         portion_verdict: parsed.portion_verdict || "keep", portion_change_percent: num(parsed.portion_change_percent),
         portion_guidance: parsed.portion_guidance || "",
       }));
       setLastCalculatedPortion(parsed.estimated_portion || pending.estimated_portion);
+      setAiEstimate({ portion: parsed.estimated_portion || pending.estimated_portion, calories: num(parsed.calories) });
     } catch (e) {
       setError(e && e.message ? e.message : "Couldn't recalculate nutrition for that portion.");
     } finally { setRecalculating(false); }
@@ -2122,6 +2514,14 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
 
   async function save() {
     if (!pending || !pending.food_name) { setError("Give the meal a name."); return; }
+    // Learn from any manual correction vs. the AI's own estimate before persisting
+    // (skipped for fully-manual entries that had no AI baseline to compare to).
+    if (aiEstimate) {
+      recordPortionCorrection(pending.food_name, {
+        aiPortion: aiEstimate.portion, userPortion: pending.estimated_portion,
+        aiCalories: aiEstimate.calories, userCalories: pending.calories,
+      });
+    }
     await onSave({
       id: editingEntry ? editingEntry.id : uid(),
       date: editingEntry ? editingEntry.date : todayStr(),
@@ -2138,7 +2538,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       calories: num(meal.calories), protein_g: num(meal.protein_g), carbs_g: num(meal.carbs_g), fat_g: num(meal.fat_g),
       fiber_g: num(meal.fiber_g), sugar_g: num(meal.sugar_g), sodium_mg: num(meal.sodium_mg),
       micronutrients: Array.isArray(meal.micronutrients) ? meal.micronutrients : [],
-      confidence: meal.confidence || "manual",
+      confidence: meal.confidence || "manual", estimate_basis: meal.estimate_basis || "",
       portion_verdict: meal.portion_verdict || null, portion_change_percent: num(meal.portion_change_percent),
       portion_guidance: meal.portion_guidance || "",
     });
@@ -2215,7 +2615,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
             {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Utensils size={16} />}{analyzing ? "Analyzing meal…" : "Analyze meal"}
           </button>
           {analyzing && <NutritionSkeleton />}
-          <button onClick={() => setPending({ ...EMPTY_MEAL })}
+          <button onClick={() => { setPending({ ...EMPTY_MEAL }); setAiEstimate(null); setShowWhyEstimate(false); }}
             className="w-full flex items-center justify-center py-2.5 mt-2 ft-body" style={{ color: C.inkSoft, fontSize: 12.5, fontWeight: 500 }}>Skip — enter nutrition manually</button>
         </>
       )}
@@ -2230,6 +2630,24 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
           </div>
           <input value={pending.estimated_portion} onChange={(e) => updateField("estimated_portion", e.target.value)} placeholder="Portion (e.g. 1 cup, 200g)"
             className="w-full ft-body mb-2" style={{ fontSize: 12, color: C.inkSoft, background: "transparent", border: "none", outline: "none" }} />
+
+          {pending.confidence && pending.confidence !== "manual" && (
+            <div className="mb-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <ConfidenceBadge level={pending.confidence} />
+                {pending.estimate_basis && (
+                  <button onClick={() => setShowWhyEstimate((s) => !s)} className="ft-body flex items-center gap-1" style={{ fontSize: 11, color: C.inkSoft, fontWeight: 600 }}>
+                    Why this estimate? <ChevronDown size={11} style={{ transform: showWhyEstimate ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
+                  </button>
+                )}
+              </div>
+              {showWhyEstimate && pending.estimate_basis && (
+                <div className="mt-2 p-2.5 rounded-xl" style={{ background: C.bgBottom }}>
+                  <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4 }}>{pending.estimate_basis}</span>
+                </div>
+              )}
+            </div>
+          )}
 
           {portionIsStale && (
             <div className="flex items-center justify-between gap-2 p-2.5 mb-3 rounded-xl" style={{ background: C.orangeTint }}>
@@ -2260,7 +2678,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
           {error && <div className="ft-body mt-2" style={{ fontSize: 12, color: C.pink }}>{error}</div>}
           <div className="flex gap-2 mt-3">
             {!editingEntry && (
-              <button onClick={() => setPending(null)} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.card, color: C.ink, fontSize: 14, fontWeight: 600 }}><X size={16} /> Back</button>
+              <button onClick={() => { setPending(null); setAiEstimate(null); setShowWhyEstimate(false); }} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.card, color: C.ink, fontSize: 14, fontWeight: 600 }}><X size={16} /> Back</button>
             )}
             <button onClick={save} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.orange, color: "#fff", fontSize: 14, fontWeight: 600 }}><Check size={16} /> {editingEntry ? "Save changes" : "Save log"}</button>
           </div>
