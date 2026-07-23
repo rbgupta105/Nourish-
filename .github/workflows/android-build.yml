@@ -58,6 +58,10 @@ jobs:
         working-directory: android
         run: ./gradlew signingReport
 
+      - name: Get signing report
+        working-directory: android
+        run: ./gradlew signingReport
+
       - name: Build APK
         working-directory: android
         run: ./gradlew assembleDebug
