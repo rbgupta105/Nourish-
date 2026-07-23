@@ -1327,8 +1327,9 @@ const handleGoogleSignIn = async () => {
   try {
     // Android APK: use native Google Sign-In
     if (window.Capacitor?.isNativePlatform?.()) {
-      const result = await FirebaseAuthentication.signInWithGoogle();
-
+      const result = await FirebaseAuthentication.signInWithGoogle({
+  useCredentialManager: false,
+      });
       const credential = GoogleAuthProvider.credential(
         result.credential?.idToken
       );
