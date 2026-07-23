@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
+import {
+  signInWithPopup,
+  signInWithCredential,
+  GoogleAuthProvider,
+  signOut,
+  onAuthStateChanged,
+} from "firebase/auth";
+import { FirebaseAuthentication } from "@capacitor-firebase/authentication";
 import { auth, googleProvider, db } from "./firebase";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
@@ -1314,14 +1321,27 @@ export default function MealTracker() {
     return () => unsubscribe();
   }, []);
 
-  const handleGoogleSignIn = async () => {
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (error) {
-      console.error("Google Sign-In Error:", error);
-      alert("Unable to sign in with Google. Please try again.");
+const handleGoogleSignIn = async () => {
+  try {
+    // Android APK: use native Google Sign-In
+    if (window.Capacitor?.isNativePlatform?.()) {
+      const result = await FirebaseAuthentication.signInWithGoogle();
+
+      const credential = GoogleAuthProvider.credential(
+        result.credential?.idToken
+      );
+
+      await signInWithCredential(auth, credential);
+      return;
     }
-  };
+
+    // Web browser: use Firebase popup
+    await signInWithPopup(auth, googleProvider);
+  } catch (error) {
+    console.error("Google Sign-In Error:", error);
+    alert("Unable to sign in with Google. Please try again.");
+  }
+};
 
   const handleSignOut = async () => {
     try {

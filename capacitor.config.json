@@ -1,5 +1,11 @@
 {
   "appId": "com.rishabh.nourish",
   "appName": "Nourish",
-  "webDir": "dist"
+  "webDir": "dist",
+  "plugins": {
+    "FirebaseAuthentication": {
+      "skipNativeAuth": true,
+      "providers": ["google.com"]
+    }
+  }
 }
