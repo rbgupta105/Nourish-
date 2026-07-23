@@ -37,9 +37,27 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
+      - name: Generate debug keystore
+        run: |
+          mkdir -p ~/.config/.android
+          keytool -genkeypair \
+            -v \
+            -keystore ~/.config/.android/debug.keystore \
+            -storepass android \
+            -alias AndroidDebugKey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
       - name: Show signing report
         working-directory: android
         run: ./gradlew signingReport
+      - name: Show signing report
+        working-directory: android
+        run: ./gradlew signingReport
+
       - name: Build APK
         working-directory: android
         run: ./gradlew assembleDebug
