@@ -14,11 +14,11 @@
       },
       "oauth_client": [
         {
-          "client_id": "280639878923-1boa6prv3bsqnimmqjgoob49vf662apo.apps.googleusercontent.com",
+          "client_id": "280639878923-pl6jklf1ivq0p6usf7h0vq31m8jbld48.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.rishabh.nourish",
-            "certificate_hash": "efd57d48ed979a13b437243be5068428866fb5fc"
+            "certificate_hash": "c60edc1422c0120eb1b75f7eb80b7838b3ec40e8"
           }
         },
         {
