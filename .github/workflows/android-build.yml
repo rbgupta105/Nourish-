@@ -37,7 +37,9 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Build APK
+      - name: Show signing report
+        working-directory: android
+        run: ./gradlew assembleDebug- name: Build APK
         working-directory: android
         run: ./gradlew assembleDebug
 
