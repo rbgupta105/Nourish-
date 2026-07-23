@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
+import { auth, googleProvider, db } from "./firebase";
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+
 import {
   Camera, Type, Utensils, ClipboardList, BarChart3, User, Plus,
   Trash2, Loader2, TrendingUp, TrendingDown, Minus, X, Check,
@@ -360,6 +364,64 @@ async function loadKey(key, fallback) {
 }
 async function saveKey(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; }
+}
+
+// ---------- Firestore cloud migration ----------
+
+const NOURISH_CLOUD_KEYS = [
+  "profile",
+  "meal-logs",
+  "weight-logs",
+  "water-logs",
+  "favorite-meals",
+  "goals",
+  "exercise-logs",
+  "workout-splits",
+  "daily-coach",
+  "weekly-review",
+  "monthly-review",
+];
+
+async function migrateLocalDataToCloud(user) {
+  if (!user?.uid) {
+    return { success: false, reason: "no-user" };
+  }
+
+  const userRef = doc(db, "users", user.uid);
+  const userSnap = await getDoc(userRef);
+
+  // Never overwrite existing cloud data.
+  if (userSnap.exists()) {
+    return {
+      success: true,
+      migrated: false,
+      reason: "cloud-exists",
+    };
+  }
+
+  const localData = {};
+
+  for (const key of NOURISH_CLOUD_KEYS) {
+    const value = await loadKey(key, null);
+
+    if (value !== null) {
+      localData[key] = value;
+    }
+  }
+
+  await setDoc(userRef, {
+    ...localData,
+    cloudVersion: 1,
+    migratedFromLocal: true,
+    migratedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  return {
+    success: true,
+    migrated: true,
+    reason: "local-data-uploaded",
+  };
 }
 
 // ---------- Gemini API ----------
@@ -1231,7 +1293,43 @@ function MiniCalendar({ mealDates, exerciseDates, selectedDate, onSelectDate }) 
 // ---------- Main App ----------
 export default function MealTracker() { 
   const [darkMode, setDarkMode] = useState(localStorage.getItem("theme") === "dark");
+    const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
+
+      if (currentUser) {
+        try {
+          const result = await migrateLocalDataToCloud(currentUser);
+          console.log("Nourish cloud migration:", result);
+        } catch (error) {
+          console.error("Nourish cloud migration failed:", error);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleGoogleSignIn = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Google Sign-In Error:", error);
+      alert("Unable to sign in with Google. Please try again.");
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error("Sign-Out Error:", error);
+    }
+  };
   C = darkMode ? DARK : LIGHT;
   useEffect(() => {
     localStorage.setItem("theme", darkMode ? "dark" : "light");
@@ -1623,7 +1721,118 @@ export default function MealTracker() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, nowTick, currentMonthStart, logs.length, monthlyReview]);
 
-  if (!ready) return <div className="flex items-center justify-center" style={{ height: 700, background: C.bgTop }}><Loader2 className="animate-spin" size={22} color={C.orange} /></div>;
+  
+
+if (authLoading) {
+  return (
+    <div
+      className="flex flex-col items-center justify-center"
+      style={{
+        height: "100vh",
+        background: `linear-gradient(180deg, ${C.bgTop} 0%, ${C.bgBottom} 100%)`,
+        color: C.ink,
+        gap: 12,
+      }}
+    >
+      <Loader2 className="animate-spin" size={28} color={C.orange} />
+      <div style={{ fontSize: 14, color: C.inkSoft }}>
+        Checking your Nourish account...
+      </div>
+    </div>
+  );
+}
+
+if (!user) {
+  return (
+    <div
+      className="flex flex-col items-center justify-center px-6"
+      style={{
+        height: "100vh",
+        background: `linear-gradient(180deg, ${C.bgTop} 0%, ${C.bgBottom} 100%)`,
+        color: C.ink,
+        textAlign: "center",
+      }}
+    >
+      <div
+        style={{
+          width: 72,
+          height: 72,
+          borderRadius: 22,
+          background: C.orangeTint,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          marginBottom: 20,
+          fontSize: 32,
+        }}
+      >
+        🥗
+      </div>
+
+      <div
+        style={{
+          fontSize: 30,
+          fontWeight: 800,
+          letterSpacing: "-0.8px",
+          marginBottom: 8,
+        }}
+      >
+        Nourish
+      </div>
+
+      <div
+        style={{
+          fontSize: 15,
+          color: C.inkSoft,
+          maxWidth: 300,
+          lineHeight: 1.5,
+          marginBottom: 32,
+        }}
+      >
+        Your personal nutrition, fitness, and AI-powered health companion.
+      </div>
+
+      <button
+        onClick={handleGoogleSignIn}
+        style={{
+          width: "100%",
+          maxWidth: 320,
+          height: 52,
+          borderRadius: 16,
+          border: `1px solid ${C.line}`,
+          background: C.card,
+          color: C.ink,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 12,
+          fontSize: 15,
+          fontWeight: 700,
+          cursor: "pointer",
+          boxShadow: "0 4px 16px rgba(0,0,0,0.06)",
+        }}
+      >
+        <span style={{ fontSize: 20 }}>G</span>
+        Continue with Google
+      </button>
+
+      <div
+        style={{
+          marginTop: 18,
+          fontSize: 11.5,
+          color: C.inkSoft,
+          maxWidth: 290,
+          lineHeight: 1.5,
+        }}
+      >
+        Sign in to securely back up and sync your Nourish data.
+      </div>
+    </div>
+  );
+}
+
+if (!ready) return <div className="flex items-center justify-center" style={{ height: 700, background: C.bgTop }}><Loader2 className="animate-spin" size={22} color={C.orange} /></div>;
+
 
   const trimmedName = profile.name ? profile.name.trim() : "";
   const initial = trimmedName ? trimmedName[0].toUpperCase() : "U";
