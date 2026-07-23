@@ -7,43 +7,6 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:280639878923:android:e36d09594be93af3e2d40e",
-        "android_client_info": {
-          "package_name": "Com.rishabh.nourish"
-        }
-      },
-      "oauth_client": [
-        {
-          "client_id": "280639878923-4tcuig2kcgnk6ai3ehof74gaedu5jrdt.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "Com.rishabh.nourish",
-            "certificate_hash": "ca88dc752be085fb34b1de8ec8439ac6dc1566d1"
-          }
-        },
-        {
-          "client_id": "280639878923-48esvefmlafjqgnlqq95cekj3n09894t.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
-      "api_key": [
-        {
-          "current_key": "AIzaSyBFgCH4PPRtfcZibijmej-kzVIpUFkSFw4"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "280639878923-48esvefmlafjqgnlqq95cekj3n09894t.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
-        }
-      }
-    },
-    {
-      "client_info": {
         "mobilesdk_app_id": "1:280639878923:android:8fcd2cc75fbfd1bde2d40e",
         "android_client_info": {
           "package_name": "com.rishabh.nourish"
@@ -51,11 +14,11 @@
       },
       "oauth_client": [
         {
-          "client_id": "280639878923-85tbolu5gispk8agupm3hqfu138g1ou5.apps.googleusercontent.com",
+          "client_id": "280639878923-1boa6prv3bsqnimmqjgoob49vf662apo.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.rishabh.nourish",
-            "certificate_hash": "ca88dc752be085fb34b1de8ec8439ac6dc1566d1"
+            "certificate_hash": "efd57d48ed979a13b437243be5068428866fb5fc"
           }
         },
         {
