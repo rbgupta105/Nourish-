@@ -63,12 +63,12 @@ jobs:
         run: ./gradlew signingReport
 
       - name: Verify Firebase configuration
-  working-directory: android
-  run: |
-    echo "Checking Firebase package and OAuth configuration..."
-    grep -n "package_name" app/google-services.json
-    grep -n "certificate_hash" app/google-services.json
-    grep -n "client_type.*3" app/google-services.json || true
+        working-directory: android
+        run: |
+          echo "Checking Firebase package and OAuth configuration..."
+          grep -n "package_name" app/google-services.json
+          grep -n "certificate_hash" app/google-services.json
+          grep -n "client_type.*3" app/google-services.json || true
 
       - name: Build APK
         working-directory: android
