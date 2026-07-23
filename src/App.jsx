@@ -1312,7 +1312,9 @@ export default function MealTracker() {
         try {
           const result = await migrateLocalDataToCloud(currentUser);
           console.log("Nourish cloud migration:", result);
-        } catch (error) {
+          console.error("Google Sign-In Error:", error);
+  alert("Unable to sign in with Google. Please try again.");
+} catch (error) {
           console.error("Nourish cloud migration failed:", error);
         }
       }
@@ -1338,9 +1340,12 @@ const handleGoogleSignIn = async () => {
     // Web browser: use Firebase popup
     await signInWithPopup(auth, googleProvider);
   } catch (error) {
-    console.error("Google Sign-In Error:", error);
-    alert("Unable to sign in with Google. Please try again.");
-  }
+  console.error("Google Sign-In Error:", error);
+  alert(
+    `Google Sign-In failed:\n${error?.code || "unknown"}\n${error?.message || "Unknown error"}`
+  );
+}
+
 };
 
   const handleSignOut = async () => {
