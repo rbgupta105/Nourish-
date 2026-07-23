@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "280639878923",
+    "project_id": "nourish-7d929",
+    "storage_bucket": "nourish-7d929.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:280639878923:android:e36d09594be93af3e2d40e",
+        "android_client_info": {
+          "package_name": "Com.rishabh.nourish"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "280639878923-4tcuig2kcgnk6ai3ehof74gaedu5jrdt.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "Com.rishabh.nourish",
+            "certificate_hash": "ca88dc752be085fb34b1de8ec8439ac6dc1566d1"
+          }
+        },
+        {
+          "client_id": "280639878923-48esvefmlafjqgnlqq95cekj3n09894t.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBFgCH4PPRtfcZibijmej-kzVIpUFkSFw4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "280639878923-48esvefmlafjqgnlqq95cekj3n09894t.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
