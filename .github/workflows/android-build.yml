@@ -1,6 +1,5 @@
 name: Build Android APK
 
-
 on:
   workflow_dispatch:
   push:
@@ -40,7 +39,8 @@ jobs:
 
       - name: Show signing report
         working-directory: android
-        run: ./gradlew assembleDebug- name: Build APK
+        run: ./gradlew assembleDebug
+      - name: Build APK
         working-directory: android
         run: ./gradlew assembleDebug
 
