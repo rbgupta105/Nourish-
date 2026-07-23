@@ -2,8 +2,6 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   signInWithPopup,
-  signInWithCredential,
-  GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
 } from "firebase/auth";
@@ -397,12 +395,15 @@ async function migrateLocalDataToCloud(user) {
   const userRef = doc(db, "users", user.uid);
   const userSnap = await getDoc(userRef);
 
-  // Never overwrite existing cloud data.
+  // Never overwrite existing cloud data — instead hand it back so the caller
+  // can hydrate localStorage from it (keeps existing cloud data as the source
+  // of truth when signing in on a device that already has local data too).
   if (userSnap.exists()) {
     return {
       success: true,
       migrated: false,
       reason: "cloud-exists",
+      cloudData: userSnap.data(),
     };
   }
 
@@ -429,6 +430,29 @@ async function migrateLocalDataToCloud(user) {
     migrated: true,
     reason: "local-data-uploaded",
   };
+}
+
+// Pulls down whatever's already in the user's cloud doc into localStorage, so
+// the very next loadAll() picks it up as if it had always been local.
+async function hydrateLocalFromCloud(cloudData) {
+  if (!cloudData) return;
+  for (const key of NOURISH_CLOUD_KEYS) {
+    if (cloudData[key] !== undefined) {
+      await saveKey(key, cloudData[key]);
+    }
+  }
+}
+
+// Ongoing two-way sync: called alongside every saveKey() so signed-in users'
+// changes keep flowing up to Firestore, not just on the one-time migration.
+async function syncKeyToCloud(user, key, value) {
+  if (!user?.uid) return;
+  try {
+    const userRef = doc(db, "users", user.uid);
+    await setDoc(userRef, { [key]: value, updatedAt: serverTimestamp() }, { merge: true });
+  } catch (error) {
+    console.error("Nourish cloud sync failed:", key, error);
+  }
 }
 
 // ---------- Gemini API ----------
@@ -1312,9 +1336,11 @@ export default function MealTracker() {
         try {
           const result = await migrateLocalDataToCloud(currentUser);
           console.log("Nourish cloud migration:", result);
-          console.error("Google Sign-In Error:", error);
-  alert("Unable to sign in with Google. Please try again.");
-} catch (error) {
+          if (result.reason === "cloud-exists" && result.cloudData) {
+            await hydrateLocalFromCloud(result.cloudData);
+            await loadAll();
+          }
+        } catch (error) {
           console.error("Nourish cloud migration failed:", error);
         }
       }
@@ -1500,9 +1526,9 @@ const handleGoogleSignIn = async () => {
     return best;
   }, [logs]);
 
-  async function persistLogs(next) { setLogs(next); await saveKey("meal-logs", next); }
-  async function persistWeights(next) { setWeights(next); await saveKey("weight-logs", next); }
-  async function persistWater(next) { setWaterLogs(next); await saveKey("water-logs", next); }
+  async function persistLogs(next) { setLogs(next); await saveKey("meal-logs", next); syncKeyToCloud(user, "meal-logs", next); }
+  async function persistWeights(next) { setWeights(next); await saveKey("weight-logs", next); syncKeyToCloud(user, "weight-logs", next); }
+  async function persistWater(next) { setWaterLogs(next); await saveKey("water-logs", next); syncKeyToCloud(user, "water-logs", next); }
   async function addWater(ml) {
     haptic("light");
     await persistWater([{ id: uid(), date: todayStr(), ml, timestamp: Date.now() }, ...waterLogs]);
@@ -1513,14 +1539,14 @@ const handleGoogleSignIn = async () => {
     haptic("light");
     await persistWater(waterLogs.filter((_, i) => i !== idx));
   }
-  async function persistGoals(next) { setGoals(next); await saveKey("goals", next); }
-  async function persistProfile(next) { setProfile(next); await saveKey("profile", next); }
-  async function persistExercise(next) { setExerciseLogs(next); await saveKey("exercise-logs", next); }
-  async function persistSplits(next) { setSplits(next); await saveKey("workout-splits", next); }
-  async function persistDailyCoach(next) { setDailyCoach(next); await saveKey("daily-coach", next); }
-  async function persistWeeklyReview(next) { setWeeklyReview(next); await saveKey("weekly-review", next); }
-  async function persistMonthlyReview(next) { setMonthlyReview(next); await saveKey("monthly-review", next); }
-  async function persistFavorites(next) { setFavorites(next); await saveKey("favorite-meals", next); }
+  async function persistGoals(next) { setGoals(next); await saveKey("goals", next); syncKeyToCloud(user, "goals", next); }
+  async function persistProfile(next) { setProfile(next); await saveKey("profile", next); syncKeyToCloud(user, "profile", next); }
+  async function persistExercise(next) { setExerciseLogs(next); await saveKey("exercise-logs", next); syncKeyToCloud(user, "exercise-logs", next); }
+  async function persistSplits(next) { setSplits(next); await saveKey("workout-splits", next); syncKeyToCloud(user, "workout-splits", next); }
+  async function persistDailyCoach(next) { setDailyCoach(next); await saveKey("daily-coach", next); syncKeyToCloud(user, "daily-coach", next); }
+  async function persistWeeklyReview(next) { setWeeklyReview(next); await saveKey("weekly-review", next); syncKeyToCloud(user, "weekly-review", next); }
+  async function persistMonthlyReview(next) { setMonthlyReview(next); await saveKey("monthly-review", next); syncKeyToCloud(user, "monthly-review", next); }
+  async function persistFavorites(next) { setFavorites(next); await saveKey("favorite-meals", next); syncKeyToCloud(user, "favorite-meals", next); }
 
   async function deleteLog(id) { haptic("delete"); await persistLogs(logs.filter((l) => l.id !== id)); }
   async function deleteExercise(id) { haptic("delete"); await persistExercise(exerciseLogs.filter((e) => e.id !== id)); }
