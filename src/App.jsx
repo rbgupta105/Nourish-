@@ -9,6 +9,7 @@ import {
 } from "firebase/auth";
 import { FirebaseAuthentication } from "@capacitor-firebase/authentication";
 import { BarcodeScanner } from "@capacitor-mlkit/barcode-scanning";
+import { SpeechRecognition } from "@capacitor-community/speech-recognition";
 import { auth, googleProvider, db } from "./firebase";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
@@ -3089,16 +3090,73 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   }
 
   // ---------- Natural voice logging ----------
-  // Uses the browser's built-in speech recognition (no API/network cost of its
-  // own) to transcribe spoken food descriptions, then feeds the transcript
-  // straight into the same Gemini meal-analysis call used for typed text — so
-  // "2 rotis, one bowl dal, 100g paneer" is understood and logged as one meal
-  // without the user typing or splitting it into separate entries.
+  // The browser's Web Speech API (window.SpeechRecognition) is NOT implemented
+  // inside Android's WebView, so it silently fails when running as the actual
+  // installed app — only works when tested in Chrome directly. Inside the
+  // installed app we use the native @capacitor-community/speech-recognition
+  // plugin instead (wraps Android's real SpeechRecognizer); the browser API is
+  // kept as a fallback for testing in a regular mobile browser. Either path
+  // feeds the transcript straight into the same Gemini meal-analysis call used
+  // for typed text — so "2 rotis, one bowl dal, 100g paneer" spoken aloud is
+  // understood and logged as one meal without manual typing or splitting.
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef(null);
-  const speechSupported = typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  const isNative = typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
+  const speechSupported = isNative || (typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition));
 
-  function toggleVoiceInput() {
+  async function toggleVoiceInput() {
+    if (isNative) return toggleNativeVoiceInput();
+    return toggleBrowserVoiceInput();
+  }
+
+  async function toggleNativeVoiceInput() {
+    if (listening) {
+      try { await SpeechRecognition.stop(); } catch { /* already stopped */ }
+      return;
+    }
+    setError(null);
+    try {
+      const { speechRecognition } = await SpeechRecognition.checkPermissions();
+      let granted = speechRecognition === "granted";
+      if (!granted) {
+        const req = await SpeechRecognition.requestPermissions();
+        granted = req.speechRecognition === "granted";
+      }
+      if (!granted) {
+        setError("Microphone permission is needed to use voice input — allow it for Nourish in your phone's app settings, then try again.");
+        return;
+      }
+    } catch {
+      setError("Couldn't access the microphone. Try again or type instead.");
+      return;
+    }
+    let liveTranscript = "";
+    const listener = await SpeechRecognition.addListener("partialResults", (data) => {
+      const match = data && data.matches && data.matches[0];
+      if (match) { liveTranscript = match; setDescription(match); }
+    });
+    setListening(true);
+    try {
+      const result = await SpeechRecognition.start({
+        language: navigator.language || "en-US",
+        maxResults: 1,
+        prompt: "Speak your meal",
+        partialResults: true,
+        popup: false,
+      });
+      const finalMatch = (result && result.matches && result.matches[0]) || liveTranscript;
+      setListening(false);
+      listener.remove();
+      const transcript = (finalMatch || "").trim();
+      if (transcript.length >= 2) { setDescription(transcript); analyze(transcript); }
+    } catch (e) {
+      setListening(false);
+      listener.remove();
+      setError("Couldn't hear that — try again or type instead.");
+    }
+  }
+
+  function toggleBrowserVoiceInput() {
     if (listening) { recognitionRef.current && recognitionRef.current.stop(); return; }
     const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognitionCtor) { setError("Voice input isn't supported in this browser."); return; }
@@ -3138,7 +3196,10 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     setListening(true);
     recognition.start();
   }
-  useEffect(() => () => { recognitionRef.current && recognitionRef.current.stop(); }, []);
+  useEffect(() => () => {
+    recognitionRef.current && recognitionRef.current.stop();
+    if (isNative) { SpeechRecognition.stop().catch(() => {}); SpeechRecognition.removeAllListeners().catch(() => {}); }
+  }, []);
 
   async function getPortionAdvice() {
     if (!pending || !pending.food_name || !pending.calories) { setError("Fill in the meal name and calories first."); return; }
