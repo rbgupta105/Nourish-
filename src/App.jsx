@@ -508,7 +508,7 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
 async function callGemini(contentBlocks) {
   const model = genAI.getGenerativeModel({
-    model: "gemini-3.1-flash-lite"
+    model: "gemini-3.6-flash"
   });
 
   const parts = contentBlocks.map((block) => {
