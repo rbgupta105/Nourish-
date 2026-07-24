@@ -107,48 +107,6 @@ function greeting() {
   return "Good Night";
 }
 function daysAgo(n) { const d = new Date(); d.setDate(d.getDate() - n); return localDateStr(d); }
-// Inverse of daysAgo: how many days before today a given local "YYYY-MM-DD"
-// date string falls (0 = today, 1 = yesterday, etc). Used by the calendar
-// jump-to-date control on the Home dashboard.
-function offsetFromDateStr(dateStr) {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const target = new Date(y, m - 1, d);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  target.setHours(0, 0, 0, 0);
-  return Math.round((today - target) / 86400000);
-}
-const fmtTime = (d) => new Date(d).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-// Meal-time-of-day label, purely derived from the logged timestamp (no field for
-// this is stored) — used to give meal cards a friendly "Lunch"/"Dinner" heading.
-function mealPeriodLabel(timestamp) {
-  const h = new Date(timestamp).getHours();
-  if (h < 11) return "Breakfast";
-  if (h < 16) return "Lunch";
-  if (h < 19) return "Snack";
-  return "Dinner";
-}
-// Very small keyword → emoji lookup so a meal card can show a quick visual
-// summary of what was eaten without needing per-item structured data.
-const FOOD_EMOJI_RULES = [
-  [/rice/i, "🍚"], [/dal|lentil/i, "🥣"], [/paneer|cottage cheese/i, "🧀"], [/cheese/i, "🧀"],
-  [/chicken/i, "🍗"], [/egg/i, "🥚"], [/roti|chapati|naan|paratha|bread|toast/i, "🍞"],
-  [/salad|spinach|greens|veg(etable)?s?/i, "🥗"], [/fruit|apple|banana|mango|berry|orange/i, "🍎"],
-  [/fish|salmon|tuna/i, "🐟"], [/milk|yogurt|curd|dahi/i, "🥛"], [/oats?|cereal|porridge|muesli/i, "🥣"],
-  [/potato|aloo/i, "🥔"], [/curry|gravy|sabzi/i, "🍛"], [/soup/i, "🍲"], [/pasta|noodle/i, "🍝"],
-  [/coffee|tea|chai/i, "☕"], [/juice|smoothie|shake/i, "🥤"], [/beef|mutton|meat/i, "🥩"],
-  [/pizza/i, "🍕"], [/burger/i, "🍔"], [/nuts?|almond|peanut|cashew/i, "🥜"], [/beans|chickpea|chole|rajma/i, "🫘"],
-];
-function foodEmoji(name) {
-  for (const [re, emoji] of FOOD_EMOJI_RULES) if (re.test(name)) return emoji;
-  return "🍽️";
-}
-// Splits a free-text meal name like "Rice, Dal, Paneer" into individual items so
-// the meal card can show "🍚 Rice · 🥣 Dal · 🧀 Paneer" instead of one flat line.
-function splitFoodItems(foodName) {
-  if (!foodName) return [];
-  return foodName.split(/,|&|\+| and /i).map((s) => s.trim()).filter(Boolean).slice(0, 4);
-}
 // Weekday check on a "YYYY-MM-DD" local date string (Mon-Fri). Parses components
 // manually (not `new Date(dateStr)`) to avoid that string being read as UTC midnight.
 function isWeekday(dateStr) {
@@ -405,8 +363,8 @@ function AchievementBar({ perDay, hitKey }) {
 }
 
 // ---------- Storage helpers ----------
-// This project uses the browser's localStorage for local caching, synced to
-// Firestore for signed-in users (see syncKeyToCloud / migrateLocalDataToCloud below).
+// NOTE: window.storage.get/set is an API only available inside Claude.ai Artifacts.
+// This standalone project uses the browser's localStorage instead, with the same shape.
 async function loadKey(key, fallback) {
   try { const raw = localStorage.getItem(key); if (raw == null) return fallback; return JSON.parse(raw); }
   catch { return fallback; }
@@ -586,39 +544,6 @@ function computeTodayStatus({ todayTotals, goals, todayLogs }) {
     return { level: "low", emoji: "🟡", label: "Slightly low", color: C.tan, bg: C.tanTint, calPct, proPct, remaining };
   }
   return { level: "onTrack", emoji: "🟢", label: "On track today", color: C.green, bg: C.greenTint, calPct, proPct, remaining };
-}
-
-// ---------- Weekly Consistency ----------
-// Per-day read on adherence (good/ok/off/none) for the last `daysCount` days —
-// the same "how close to goal" logic as computeTodayStatus, applied day by day,
-// so a week can be scanned at a glance instead of read off a line chart.
-function computeWeeklyConsistency(logs, goals, daysCount = 7) {
-  const today = todayStr();
-  const days = [];
-  for (let i = daysCount - 1; i >= 0; i--) days.push(daysAgo(i));
-  return days.map((date) => {
-    const dayLogs = logs.filter((l) => l.date === date);
-    const totals = dayLogs.reduce((acc, l) => ({
-      calories: acc.calories + num(l.calories), protein: acc.protein + num(l.protein_g),
-    }), { calories: 0, protein: 0 });
-    const calPct = goals.calories > 0 ? (totals.calories / goals.calories) * 100 : 0;
-    const proPct = goals.protein > 0 ? (totals.protein / goals.protein) * 100 : 0;
-    const isToday = date === today;
-
-    let status;
-    if (dayLogs.length === 0) {
-      status = isToday ? "pending" : "none";
-    } else if (calPct >= 85 && calPct <= 115 && proPct >= 80) {
-      status = "good";
-    } else if (calPct >= 60 && calPct <= 130) {
-      status = "ok";
-    } else {
-      status = "off";
-    }
-
-    const weekdayLetter = ["S", "M", "T", "W", "T", "F", "S"][new Date(date + "T00:00:00").getDay()];
-    return { date, weekdayLetter, status, isToday, loggedMeals: dayLogs.length };
-  });
 }
 
 // ---------- AI correction learning ----------
@@ -1029,7 +954,6 @@ function MicroInteractionStyles() {
       .anim-pop { animation: celebratePop .4s cubic-bezier(.22,.9,.34,1); }
       .anim-row-flash { animation: rowHighlight 1.1s ease-out; }
       .anim-check-pop { animation: checkPop .45s cubic-bezier(.22,.9,.34,1); }
-      .fab-pill { transition: transform .5s cubic-bezier(.34,1.56,.64,1), box-shadow .3s ease; }
     `}</style>
   );
 }
@@ -1055,7 +979,7 @@ function CelebrationBanner({ celebrations, onDismiss }) {
   return (
     <div className="absolute left-4 right-4 flex flex-col gap-2" style={{ top: 8, zIndex: 60 }}>
       {celebrations.map((c) => (
-        <div key={c.id} className="anim-celebrate flex items-center gap-2.5 p-3" style={{ position: "relative", overflow: "hidden", background: c.bg, borderRadius: 16, boxShadow: "0 8px 24px rgba(20,20,20,0.16)" }}>
+        <div key={c.id} className="anim-celebrate flex items-center gap-2.5 p-3" style={{ position: "relative", overflow: "hidden", background: c.bg, borderRadius: 18, boxShadow: "0 8px 24px rgba(20,20,20,0.16)" }}>
           {[0, 1, 2].map((i) => (
             <div key={i} style={{
               position: "absolute", top: 4, right: 14 + i * 10, width: 5, height: 5, borderRadius: "50%",
@@ -1105,9 +1029,9 @@ function TrendBadge({ trend }) {
   };
   const m = map[trend] || map.new;
   return (
-    <div className="flex items-center gap-1 px-2 py-0.5" style={{ background: m.bg, borderRadius: 999 }}>
+    <div className="flex items-center gap-1 px-2 py-0.5" style={{ background: m.bg, borderRadius: 20 }}>
       <m.icon size={11} color={m.color} />
-      <span className="ft-body" style={{ fontSize: 12, fontWeight: 600, color: m.color }}>{m.label}</span>
+      <span className="ft-body" style={{ fontSize: 10.5, fontWeight: 600, color: m.color }}>{m.label}</span>
     </div>
   );
 }
@@ -1123,9 +1047,9 @@ function ConfidenceBadge({ level }) {
   };
   const m = map[level] || map.medium;
   return (
-    <div className="flex items-center gap-1 px-2 py-0.5" style={{ background: m.bg, borderRadius: 999 }}>
+    <div className="flex items-center gap-1 px-2 py-0.5" style={{ background: m.bg, borderRadius: 20 }}>
       <div style={{ width: 6, height: 6, borderRadius: "50%", background: m.color }} />
-      <span className="ft-body" style={{ fontSize: 12, fontWeight: 600, color: m.color }}>{m.label}</span>
+      <span className="ft-body" style={{ fontSize: 10.5, fontWeight: 600, color: m.color }}>{m.label}</span>
     </div>
   );
 }
@@ -1140,9 +1064,9 @@ function PortionBadge({ verdict, percent }) {
   const m = map[verdict] || map.keep;
   const pct = num(percent);
   return (
-    <div className="flex items-center gap-1 px-2 py-0.5" style={{ background: m.bg, borderRadius: 999 }}>
+    <div className="flex items-center gap-1 px-2 py-0.5" style={{ background: m.bg, borderRadius: 20 }}>
       <m.icon size={11} color={m.color} />
-      <span className="ft-body" style={{ fontSize: 12, fontWeight: 600, color: m.color }}>{m.label}{pct !== 0 ? ` · ${pct > 0 ? "+" : ""}${pct}%` : ""}</span>
+      <span className="ft-body" style={{ fontSize: 10.5, fontWeight: 600, color: m.color }}>{m.label}{pct !== 0 ? ` · ${pct > 0 ? "+" : ""}${pct}%` : ""}</span>
     </div>
   );
 }
@@ -1176,7 +1100,7 @@ function NutritionLabel({ data, editable, onChange }) {
   );
   return (
     <div className="p-4" style={{ background: C.card, border: `2px solid ${C.ink}`, borderRadius: 16 }}>
-      <div className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>Nutrition Facts</div>
+      <div className="ft-display" style={{ fontSize: 19, fontWeight: 700, color: C.ink }}>Nutrition Facts</div>
       <div style={{ borderTop: `7px solid ${C.ink}`, marginTop: 4 }} />
       <div className="flex items-baseline justify-between pt-1">
         <span className="ft-body font-semibold" style={{ fontSize: 14, color: C.ink }}>Calories</span>
@@ -1204,7 +1128,7 @@ function NutritionLabel({ data, editable, onChange }) {
 
 function MacroPill({ icon: Icon, iconBg, iconColor, label, value, unit, pct }) {
   return (
-    <div className="flex-1 flex flex-col items-center gap-1.5 py-3 px-2" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 3px rgba(20,20,20,0.06)" }}>
+    <div className="flex-1 flex flex-col items-center gap-1.5 py-3 px-2" style={{ background: C.card, borderRadius: 22, boxShadow: "0 1px 3px rgba(20,20,20,0.06)" }}>
       {pct != null ? (
         <Ring size={34} stroke={3} pct={pct} trackColor={iconBg} fillColor={iconColor}>
           <Icon size={14} color={iconColor} />
@@ -1222,39 +1146,11 @@ function MacroPill({ icon: Icon, iconBg, iconColor, label, value, unit, pct }) {
   );
 }
 
-// A week at a glance, colored by how close each day landed to its goals —
-// meant to answer "how consistent was I" faster than reading a line chart.
-// Deliberately NOT wrapped in its own bordered card (see the "fewer boxes"
-// pass elsewhere in this file) — it's a lightweight section, not a feature.
-function WeeklyConsistencyRow({ days, title = "This week's consistency" }) {
-  const STATUS_COLOR = { good: C.green, ok: C.tan, off: C.pink, none: C.pink, pending: C.track };
-  return (
-    <div className="mb-5">
-      <div className="flex items-center justify-between mb-2.5">
-        <span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.inkSoft }}>{title}</span>
-      </div>
-      <div className="flex items-center justify-between">
-        {days.map((d) => (
-          <div key={d.date} className="flex flex-col items-center gap-1.5" style={{ flex: 1 }}>
-            <span className="ft-body" style={{ fontSize: 11, fontWeight: d.isToday ? 700 : 500, color: d.isToday ? C.ink : C.inkSoft }}>{d.weekdayLetter}</span>
-            <div style={{
-              width: 22, height: 22, borderRadius: "50%",
-              background: d.status === "pending" ? "transparent" : STATUS_COLOR[d.status],
-              border: d.status === "pending" ? `2px dashed ${C.line}` : d.isToday ? `2px solid ${C.card}` : "none",
-              boxShadow: d.isToday && d.status !== "pending" ? `0 0 0 2px ${STATUS_COLOR[d.status]}55` : "none",
-            }} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function NavBtn({ active, onClick, icon: Icon, label }) {
   return (
     <button onClick={onClick} className="flex flex-col items-center justify-center gap-0.5 flex-1 py-2">
       <Icon size={18} strokeWidth={active ? 2.4 : 1.8} color={active ? C.orange : C.inkSoft} />
-      <span className="ft-body" style={{ fontSize: 12, color: active ? C.orange : C.inkSoft, fontWeight: active ? 600 : 500 }}>{label}</span>
+      <span className="ft-body" style={{ fontSize: 10, color: active ? C.orange : C.inkSoft, fontWeight: active ? 600 : 500 }}>{label}</span>
     </button>
   );
 }
@@ -1305,7 +1201,7 @@ function SwipeRow({ children, onEdit, onDuplicate, onDelete, actionWidth = 132 }
   }
 
   return (
-    <div className="relative" style={{ overflow: "hidden", borderRadius: 16 }}>
+    <div className="relative" style={{ overflow: "hidden", borderRadius: 18 }}>
       <div className="absolute inset-y-0 right-0 flex items-stretch" style={{ width: actionWidth }}>
         {onEdit && (
           <button onClick={() => { closeActions(); onEdit(); }} className="flex-1 flex items-center justify-center" style={{ background: C.blue }}><Pencil size={15} color="#fff" /></button>
@@ -1388,7 +1284,7 @@ function MiniCalendar({ mealDates, exerciseDates, selectedDate, onSelectDate }) 
   const monthLabel = monthCursor.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 
   return (
-    <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+    <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-1.5">
           <CalendarDays size={15} color={C.ink} />
@@ -1401,7 +1297,7 @@ function MiniCalendar({ mealDates, exerciseDates, selectedDate, onSelectDate }) 
       </div>
       <div className="grid grid-cols-7 gap-1 mb-1">
         {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
-          <div key={i} className="ft-body text-center" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>{d}</div>
+          <div key={i} className="ft-body text-center" style={{ fontSize: 10, color: C.inkSoft, fontWeight: 600 }}>{d}</div>
         ))}
       </div>
       <div className="grid grid-cols-7 gap-1">
@@ -1413,8 +1309,8 @@ function MiniCalendar({ mealDates, exerciseDates, selectedDate, onSelectDate }) 
           return (
             <button key={i} onClick={() => onSelectDate(selected ? null : date)}
               className="flex flex-col items-center justify-center"
-              style={{ aspectRatio: "1", borderRadius: 12, background: selected ? C.ink : "transparent" }}>
-              <span className="ft-mono" style={{ fontSize: 12, color: selected ? C.onInk : isToday(d) ? C.orange : C.ink, fontWeight: isToday(d) ? 700 : 500 }}>{d}</span>
+              style={{ aspectRatio: "1", borderRadius: 10, background: selected ? C.ink : "transparent" }}>
+              <span className="ft-mono" style={{ fontSize: 11, color: selected ? C.onInk : isToday(d) ? C.orange : C.ink, fontWeight: isToday(d) ? 700 : 500 }}>{d}</span>
               <div className="flex gap-0.5 mt-0.5" style={{ height: 4 }}>
                 {hasMeal && <div style={{ width: 4, height: 4, borderRadius: 2, background: selected ? C.onInk : C.orange }} />}
                 {hasEx && <div style={{ width: 4, height: 4, borderRadius: 2, background: selected ? C.onInk : C.blue }} />}
@@ -1505,12 +1401,10 @@ const handleGoogleSignIn = async () => {
   const [ready, setReady] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [addLogType, setAddLogType] = useState("meal");
-  const [fabPressed, setFabPressed] = useState(false);
   const [addMode, setAddMode] = useState("photo");
   const [logsSubTab, setLogsSubTab] = useState("meals");
   const [logsDateFilter, setLogsDateFilter] = useState(null);
   const [chartsSubTab, setChartsSubTab] = useState("nutrition");
-  const [nutritionChartMetric, setNutritionChartMetric] = useState("calories");
   const [chartsPeriod, setChartsPeriod] = useState("week");
 
   const [profile, setProfile] = useState({ name: "" });
@@ -1551,7 +1445,6 @@ const handleGoogleSignIn = async () => {
   // when the scroll container is already at the top, applies resistance, and
   // reloads persisted data past the threshold.
   const scrollRef = useRef(null);
-  const dateJumpInputRef = useRef(null);
   const pullStartY = useRef(null);
   const swipeStart = useRef(null); // { x, y } — tracked independently of the vertical pull gesture
   const [pullDistance, setPullDistance] = useState(0);
@@ -1577,7 +1470,7 @@ const handleGoogleSignIn = async () => {
         const dy = touch.clientY - swipeStart.current.y;
         if (Math.abs(dx) > 56 && Math.abs(dx) > Math.abs(dy) * 1.5) {
           haptic("light");
-          setDashDayOffset((o) => (dx < 0 ? o + 1 : Math.max(o - 1, 0)));
+          setDashDayOffset((o) => (dx < 0 ? Math.min(o + 1, 60) : Math.max(o - 1, 0)));
         }
       }
     }
@@ -1714,7 +1607,6 @@ const handleGoogleSignIn = async () => {
   const weightPace = useMemo(() => computeWeightPace(weights), [weights]);
   const weightProjection = useMemo(() => weightPace ? projectWeeksToGoal(weightPace.currentWeight, goals.targetWeight, weightPace.paceKgPerWeek) : null, [weightPace, goals.targetWeight]);
   const insights = useMemo(() => generateInsights(logs, exerciseLogs, goals), [logs, exerciseLogs, goals]);
-  const weeklyConsistency = useMemo(() => computeWeeklyConsistency(logs, goals, 7), [logs, goals]);
   const periodSummary = useMemo(() => computePeriodSummary(logs, chartsPeriod === "week" ? 7 : 30), [logs, chartsPeriod]);
   const todayWater = useMemo(() => waterLogs.filter((w) => w.date === todayStr()).reduce((s, w) => s + num(w.ml), 0), [waterLogs]);
   const nutritionScore = useMemo(() => computeNutritionScore({ todayTotals, todayLogs, goals, waterMl: todayWater }), [todayTotals, todayLogs, goals, todayWater]);
@@ -1723,12 +1615,8 @@ const handleGoogleSignIn = async () => {
   const mealDates = useMemo(() => new Set(logs.map((l) => l.date)), [logs]);
   const exerciseDates = useMemo(() => new Set(exerciseLogs.map((e) => e.date)), [exerciseLogs]);
   const personalRecords = useMemo(() => computePersonalRecords(exerciseLogs), [exerciseLogs]);
-  // Note: computeTodayStatus reads colors off the module-level `C` object, which
-  // is reassigned (not replaced) when darkMode toggles — so darkMode must be an
-  // explicit dependency here, or the memo keeps serving stale light/dark colors
-  // (this was the cause of the status card staying white in dark mode).
-  const todayStatus = useMemo(() => computeTodayStatus({ todayTotals, goals, todayLogs }), [todayTotals, goals, todayLogs, darkMode]);
-  const viewedStatus = useMemo(() => (viewedIsToday ? todayStatus : computeTodayStatus({ todayTotals: viewedTotals, goals, todayLogs: viewedLogs })), [viewedIsToday, todayStatus, viewedTotals, goals, viewedLogs, darkMode]);
+  const todayStatus = useMemo(() => computeTodayStatus({ todayTotals, goals, todayLogs }), [todayTotals, goals, todayLogs]);
+  const viewedStatus = useMemo(() => (viewedIsToday ? todayStatus : computeTodayStatus({ todayTotals: viewedTotals, goals, todayLogs: viewedLogs })), [viewedIsToday, todayStatus, viewedTotals, goals, viewedLogs]);
 
   // ---------- Micro-interactions: celebrations + pulses ----------
   // Two tiers: `pulse` is a brief centered icon for routine confirmations (meal
@@ -1930,7 +1818,7 @@ if (!user) {
         style={{
           width: 72,
           height: 72,
-          borderRadius: 24,
+          borderRadius: 22,
           background: C.orangeTint,
           display: "flex",
           alignItems: "center",
@@ -1992,7 +1880,7 @@ if (!user) {
       <div
         style={{
           marginTop: 18,
-          fontSize: 12.5,
+          fontSize: 11.5,
           color: C.inkSoft,
           maxWidth: 290,
           lineHeight: 1.5,
@@ -2010,14 +1898,6 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
   const trimmedName = profile.name ? profile.name.trim() : "";
   const initial = trimmedName ? trimmedName[0].toUpperCase() : "U";
   const eatenPct = goals.calories > 0 ? (todayTotals.calories / goals.calories) * 100 : 0;
-  // Config for the Insights nutrition chart's Calories/Protein/Carbs/Fat tabs —
-  // colors pull from the current (light/dark) C so the chart stays in sync.
-  const NUTRITION_CHART_METRICS = [
-    { key: "calories", label: "Calories", unit: " kcal", color: C.orange },
-    { key: "protein", label: "Protein", unit: "g", color: C.purple },
-    { key: "carbs", label: "Carbs", unit: "g", color: C.tan },
-    { key: "fat", label: "Fat", unit: "g", color: C.pink },
-  ];
   const remaining = Math.max(0, Math.round(goals.calories - todayTotals.calories));
   const viewedEatenPct = goals.calories > 0 ? (viewedTotals.calories / goals.calories) * 100 : 0;
   const viewedRemaining = Math.max(0, Math.round(goals.calories - viewedTotals.calories));
@@ -2043,7 +1923,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
             <div>
               <div className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 500 }}>{greeting()}</div>
               <input value={profile.name} onChange={(e) => persistProfile({ ...profile, name: e.target.value })} placeholder="Add your name"
-                className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: profile.name ? C.ink : C.inkSoft, background: "transparent", border: "none", outline: "none", width: "100%" }} />
+                className="ft-display" style={{ fontSize: 19, fontWeight: 700, color: profile.name ? C.ink : C.inkSoft, background: "transparent", border: "none", outline: "none", width: "100%" }} />
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -2056,7 +1936,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
             <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>Nourish</span>
           </div>
           {notifOpen && (
-            <div className="absolute" style={{ top: 44, right: 0, width: 280, zIndex: 40, background: C.card, borderRadius: 16, boxShadow: "0 10px 30px rgba(20,20,20,0.2)", padding: 12 }}>
+            <div className="absolute" style={{ top: 44, right: 0, width: 280, zIndex: 40, background: C.card, borderRadius: 18, boxShadow: "0 10px 30px rgba(20,20,20,0.2)", padding: 12 }}>
               <div className="flex items-center justify-between mb-2 px-1">
                 <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>Notifications</span>
                 <button onClick={() => setNotifOpen(false)}><X size={15} color={C.inkSoft} /></button>
@@ -2066,7 +1946,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
               ) : (
                 <div className="flex flex-col gap-2">
                   {smartNotifications.map((n) => (
-                    <div key={n.id} className="flex items-start gap-2 p-2.5" style={{ background: n.bg, borderRadius: 12 }}>
+                    <div key={n.id} className="flex items-start gap-2 p-2.5" style={{ background: n.bg, borderRadius: 14 }}>
                       <n.icon size={14} color={n.color} style={{ flexShrink: 0, marginTop: 1 }} />
                       <span className="ft-body flex-1" style={{ fontSize: 12, color: C.ink, lineHeight: 1.35 }}>{n.text}</span>
                       <button onClick={() => setDismissedNotifications((d) => [...d, n.id])} style={{ flexShrink: 0 }}><X size={12} color={C.inkSoft} /></button>
@@ -2080,63 +1960,17 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
 
         {tab === "home" && (
           <>
-            {/* Date slider — swipe left/right anywhere on Home, tap the arrows, tap
-                any of the three visible dates, or tap the calendar icon to jump
-                straight to any date (no limit — goes all the way back) */}
-            {(() => {
-              const labelForOffset = (o) => (o === 0 ? "Today" : o === 1 ? "Yesterday" : fmtDate(daysAgo(o)));
-              const offsets = [dashDayOffset + 1, dashDayOffset, dashDayOffset - 1];
-              return (
-                <div className="flex items-center gap-1.5 mb-3 px-1">
-                  <button onClick={() => setDashDayOffset((o) => o + 1)} className="flex items-center justify-center flex-shrink-0" style={{ width: 26, height: 26, borderRadius: "50%", background: C.card }}><ChevronLeft size={14} color={C.ink} /></button>
-                  <div className="flex-1 flex items-center gap-1.5">
-                    {offsets.map((o) => {
-                      const isFuture = o < 0;
-                      const active = o === dashDayOffset;
-                      return (
-                        <button key={o} onClick={() => !isFuture && setDashDayOffset(o)} disabled={isFuture}
-                          className="flex-1 ft-body" style={{
-                            padding: "8px 4px", borderRadius: 12, border: "none",
-                            background: active ? C.ink : C.card,
-                            color: active ? C.onInk : C.inkSoft,
-                            fontSize: 12, fontWeight: active ? 700 : 500,
-                            opacity: isFuture ? 0 : 1, pointerEvents: isFuture ? "none" : "auto",
-                            transition: "background .2s ease, color .2s ease",
-                          }}>{isFuture ? "" : labelForOffset(o)}</button>
-                      );
-                    })}
-                  </div>
-                  <button onClick={() => setDashDayOffset((o) => Math.max(o - 1, 0))} disabled={viewedIsToday} className="flex items-center justify-center flex-shrink-0" style={{ width: 26, height: 26, borderRadius: "50%", background: C.card, opacity: viewedIsToday ? 0.35 : 1 }}><ChevronRight size={14} color={C.ink} /></button>
-                  <div className="relative flex items-center justify-center flex-shrink-0">
-                    <button
-                      onClick={() => {
-                        const el = dateJumpInputRef.current;
-                        if (!el) return;
-                        if (el.showPicker) el.showPicker(); else el.click();
-                      }}
-                      className="flex items-center justify-center" title="Jump to date"
-                      style={{ width: 26, height: 26, borderRadius: "50%", background: C.card }}>
-                      <CalendarDays size={13} color={C.ink} />
-                    </button>
-                    <input
-                      ref={dateJumpInputRef}
-                      type="date"
-                      value={viewedDate}
-                      max={todayStr()}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        if (!val) return;
-                        setDashDayOffset(Math.max(0, offsetFromDateStr(val)));
-                      }}
-                      style={{ position: "absolute", inset: 0, opacity: 0, pointerEvents: "none", width: 26, height: 26 }}
-                    />
-                  </div>
-                </div>
-              );
-            })()}
+            {/* Day switcher — swipe left/right anywhere on Home, or tap the arrows */}
+            <div className="flex items-center justify-between mb-3 px-1">
+              <button onClick={() => setDashDayOffset((o) => Math.min(o + 1, 60))} className="flex items-center justify-center" style={{ width: 28, height: 28, borderRadius: "50%", background: C.card }}><ChevronLeft size={15} color={C.ink} /></button>
+              <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.inkSoft }}>
+                {viewedIsToday ? "Today" : dashDayOffset === 1 ? "Yesterday" : fmtDate(viewedDate)}
+              </span>
+              <button onClick={() => setDashDayOffset((o) => Math.max(o - 1, 0))} disabled={viewedIsToday} className="flex items-center justify-center" style={{ width: 28, height: 28, borderRadius: "50%", background: C.card, opacity: viewedIsToday ? 0.35 : 1 }}><ChevronRight size={15} color={C.ink} /></button>
+            </div>
 
             {/* Today's Status — the app's one-glance answer to "how am I doing today" */}
-            <div className="p-4 mb-4" style={{ background: viewedStatus.bg, borderRadius: 16, transition: "background .3s ease" }}>
+            <div className="p-4 mb-4" style={{ background: viewedStatus.bg, borderRadius: 22, transition: "background .3s ease" }}>
               <div className="flex items-center justify-between">
                 <span className="ft-display" style={{ fontSize: 15.5, fontWeight: 700, color: C.ink }}>{viewedStatus.emoji} {viewedStatus.label}</span>
                 {viewedStatus.level === "achieved" && <Trophy size={17} color={viewedStatus.color} />}
@@ -2153,26 +1987,26 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
               )}
             </div>
 
-            <div className="p-5 mb-4" style={{ background: C.card, borderRadius: 24, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+            <div className="p-5 mb-4" style={{ background: C.card, borderRadius: 28, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
               <div className="flex items-center justify-between">
                 <Ring size={190} stroke={16} pct={viewedEatenPct} trackColor={C.track} fillColor={C.orange}>
                   <div className="flex flex-col items-center">
-                    <span className="ft-display" style={{ fontSize: 32, fontWeight: 700, color: C.ink }}><AnimatedNumber value={viewedRemaining} /></span>
+                    <span className="ft-display" style={{ fontSize: 34, fontWeight: 700, color: C.ink }}><AnimatedNumber value={viewedRemaining} /></span>
                     <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 500 }}>kcal left</span>
                   </div>
                 </Ring>
                 <div className="flex flex-col gap-4 pl-2">
                   <div className="flex items-center gap-2.5">
-                    <div style={{ width: 34, height: 34, borderRadius: 12, background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Flame size={16} color={C.orange} /></div>
-                    <div><div className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}><AnimatedNumber value={viewedTotals.calories} /></div><div className="ft-body" style={{ fontSize: 12, color: C.inkSoft }}>/ {goals.calories} kcal goal</div></div>
+                    <div style={{ width: 34, height: 34, borderRadius: 10, background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Flame size={16} color={C.orange} /></div>
+                    <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}><AnimatedNumber value={viewedTotals.calories} /></div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>/ {goals.calories} kcal goal</div></div>
                   </div>
                   <div className="flex items-center gap-2.5">
-                    <div style={{ width: 34, height: 34, borderRadius: 12, background: C.greenTint, display: "flex", alignItems: "center", justifyContent: "center" }}><ClipboardList size={16} color={C.green} /></div>
-                    <div><div className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>{viewedLogs.length}</div><div className="ft-body" style={{ fontSize: 12, color: C.inkSoft }}>meals logged</div></div>
+                    <div style={{ width: 34, height: 34, borderRadius: 10, background: C.greenTint, display: "flex", alignItems: "center", justifyContent: "center" }}><ClipboardList size={16} color={C.green} /></div>
+                    <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{viewedLogs.length}</div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>meals logged</div></div>
                   </div>
                   <div className="flex items-center gap-2.5">
-                    <div style={{ width: 34, height: 34, borderRadius: 12, background: C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Trophy size={16} color={C.pink} /></div>
-                    <div><div className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}><AnimatedNumber value={streak} /></div><div className="ft-body" style={{ fontSize: 12, color: C.inkSoft }}>day streak</div></div>
+                    <div style={{ width: 34, height: 34, borderRadius: 10, background: C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Trophy size={16} color={C.pink} /></div>
+                    <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}><AnimatedNumber value={streak} /></div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>day streak</div></div>
                   </div>
                 </div>
               </div>
@@ -2189,14 +2023,14 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
               <div style={{ flex: 1 }} />
             </div>
 
-            <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+            <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 22, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
               <div className="flex items-center gap-3">
                 <div style={{ width: 46, height: 46, borderRadius: "50%", background: nutritionScore.total >= 80 ? C.greenTint : nutritionScore.total >= 55 ? C.tanTint : C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <Gauge size={20} color={nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline gap-1.5">
-                    <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>Today's Nutrition Score</span>
+                    <span className="ft-display" style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>Today's Nutrition Score</span>
                     <span className="ft-mono" style={{ fontSize: 14, fontWeight: 700, color: nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink }}><AnimatedNumber value={nutritionScore.total} />/100</span>
                   </div>
                   <div className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4, marginTop: 1 }}>{nutritionScore.summary}</div>
@@ -2205,39 +2039,39 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
             </div>
 
             {!viewedIsToday ? (
-              <div className="p-4 mb-6 flex items-center gap-2.5" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+              <div className="p-4 mb-6 flex items-center gap-2.5" style={{ background: C.card, borderRadius: 22, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
                 <CalendarDays size={16} color={C.inkSoft} />
                 <span className="ft-body flex-1" style={{ fontSize: 12.5, color: C.inkSoft }}>Viewing {fmtDate(viewedDate)}'s log. Water tracking and the AI coach only run for today.</span>
                 <button onClick={() => setDashDayOffset(0)} className="ft-body flex-shrink-0" style={{ fontSize: 12, color: C.orange, fontWeight: 600 }}>Back to today</button>
               </div>
             ) : (
-              <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
-                <div className="flex items-center justify-between mb-2.5">
-                  <div className="flex items-center gap-2">
-                    <Droplets size={16} color={C.blue} />
-                    <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>Water</span>
-                  </div>
-                  <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>{(todayWater / 1000).toFixed(2).replace(/\.?0+$/, "") || 0}L / {(goals.water / 1000).toFixed(1)}L</span>
-                </div>
+            <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 22, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+              <div className="flex items-center justify-between mb-2.5">
                 <div className="flex items-center gap-2">
-                  <div className="flex-1 flex gap-1">
-                    {Array.from({ length: Math.max(1, Math.round(goals.water / 250)) }).map((_, i) => (
-                      <div key={i} style={{ flex: 1, height: 10, borderRadius: 4, background: i < Math.round(todayWater / 250) ? C.blue : C.track, transition: "background .3s ease" }} />
-                    ))}
-                  </div>
-                  <button onClick={removeLastWater} disabled={todayWater === 0} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.bgBottom, opacity: todayWater === 0 ? 0.4 : 1, flexShrink: 0 }}><Minus size={14} color={C.inkSoft} /></button>
-                    <button onClick={() => addWater(250)} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.blueTint, flexShrink: 0 }}><Plus size={14} color={C.blue} /></button>
-                  </div>
+                  <Droplets size={16} color={C.blue} />
+                  <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Water</span>
                 </div>
-              )}
+                <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>{(todayWater / 1000).toFixed(2).replace(/\.?0+$/, "") || 0}L / {(goals.water / 1000).toFixed(1)}L</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 flex gap-1">
+                  {Array.from({ length: Math.max(1, Math.round(goals.water / 250)) }).map((_, i) => (
+                    <div key={i} style={{ flex: 1, height: 10, borderRadius: 4, background: i < Math.round(todayWater / 250) ? C.blue : C.track, transition: "background .3s ease" }} />
+                  ))}
+                </div>
+                <button onClick={removeLastWater} disabled={todayWater === 0} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.bgBottom, opacity: todayWater === 0 ? 0.4 : 1, flexShrink: 0 }}><Minus size={14} color={C.inkSoft} /></button>
+                <button onClick={() => addWater(250)} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.blueTint, flexShrink: 0 }}><Plus size={14} color={C.blue} /></button>
+              </div>
+            </div>
+            )}
 
             {viewedIsToday && (
-            <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+            <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 22, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
               <div className="flex items-center gap-2 mb-2.5">
                 <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.purpleTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <Brain size={15} color={C.purple} />
                 </div>
-                <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>AI Daily Coach</span>
+                <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>AI Daily Coach</span>
               </div>
               {coachLoading ? (
                 <div className="flex items-center gap-2 py-2">
@@ -2255,7 +2089,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                       </div>
                     ))}
                   </div>
-                  <button onClick={generateDailyCoach} className="ft-body" style={{ fontSize: 12.5, color: C.purple, fontWeight: 600 }}>Refresh</button>
+                  <button onClick={generateDailyCoach} className="ft-body" style={{ fontSize: 11.5, color: C.purple, fontWeight: 600 }}>Refresh</button>
                 </>
               ) : (
                 <>
@@ -2268,7 +2102,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                   </button>
                 </>
               )}
-              {coachError && <div className="ft-body mt-2" style={{ fontSize: 12.5, color: C.pink }}>{coachError}</div>}
+              {coachError && <div className="ft-body mt-2" style={{ fontSize: 11.5, color: C.pink }}>{coachError}</div>}
             </div>
             )}
           </>
@@ -2292,28 +2126,14 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
               if (visibleMeals.length === 0) {
                 return <EmptyState icon={Utensils} text={logsDateFilter ? "No meals logged on this day." : "Nothing logged yet. Tap the orange + button to add your first meal."} />;
               }
-              const renderMeal = (l) => {
-                const items = splitFoodItems(l.food_name);
-                const itemsLine = items.length > 1
-                  ? items.map((it) => `${foodEmoji(it)} ${it}`).join(" · ")
-                  : `${foodEmoji(l.food_name)} ${l.food_name}`;
-                const hasThumb = l.source === "photo" && !!l.photo_thumb;
-                return (
+              const renderMeal = (l) => (
                 <SwipeRow onEdit={() => openEdit("meal", l)} onDuplicate={() => duplicateLog(l)} onDelete={() => deleteLog(l.id)}>
-                  <div className={"flex items-center justify-between p-3.5" + (l.id === justAddedId ? " anim-row-flash" : "")} style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)", height: "100%", boxSizing: "border-box" }}>
+                  <div className={"flex items-center justify-between p-3.5" + (l.id === justAddedId ? " anim-row-flash" : "")} style={{ background: C.card, borderRadius: 18, boxShadow: "0 1px 4px rgba(20,20,20,0.05)", height: "100%", boxSizing: "border-box" }}>
                     <div className="flex items-center gap-3 min-w-0">
-                      {hasThumb ? (
-                        <img src={l.photo_thumb} alt="" style={{ width: 42, height: 42, borderRadius: 12, objectFit: "cover", flexShrink: 0 }} />
-                      ) : (
-                        <div style={{ width: 38, height: 38, borderRadius: "50%", background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Utensils size={15} color={C.orange} /></div>
-                      )}
+                      <div style={{ width: 38, height: 38, borderRadius: "50%", background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Utensils size={15} color={C.orange} /></div>
                       <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="ft-body" style={{ fontSize: 12, fontWeight: 700, color: C.orange, letterSpacing: 0.4, textTransform: "uppercase" }}>{mealPeriodLabel(l.timestamp)}</span>
-                          <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>{fmtTime(l.timestamp)}</span>
-                        </div>
-                        <div className="ft-body" style={{ fontSize: 15, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{itemsLine}</div>
-                        <div className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>{Math.round(l.calories)} kcal | {Math.round(l.protein_g)}g protein</div>
+                        <div className="ft-body" style={{ fontSize: 14, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.food_name}</div>
+                        <div className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>{fmtDateTime(l.timestamp)} · {Math.round(l.calories)} kcal · P{Math.round(l.protein_g)} C{Math.round(l.carbs_g)} F{Math.round(l.fat_g)}</div>
                       </div>
                     </div>
                     <div className="flex items-center gap-0.5 flex-shrink-0">
@@ -2323,11 +2143,11 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                     </div>
                   </div>
                 </SwipeRow>
-              );};
+              );
               // Hundreds of entries render efficiently via windowing; short lists use
               // the normal flow layout so they don't get boxed into a fixed height.
               if (visibleMeals.length > VIRTUALIZE_THRESHOLD) {
-                return <VirtualList items={visibleMeals} itemHeight={78} gap={10} height={480} renderItem={renderMeal} />;
+                return <VirtualList items={visibleMeals} itemHeight={66} gap={10} height={480} renderItem={renderMeal} />;
               }
               return <div className="flex flex-col gap-2.5">{visibleMeals.map((l) => <div key={l.id}>{renderMeal(l)}</div>)}</div>;
             })() : (() => {
@@ -2338,15 +2158,15 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
               return (
                 <div className="flex flex-col gap-2.5">
                   {!logsDateFilter && Object.keys(personalRecords).length > 0 && (
-                    <div className="p-3.5 mb-1" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                    <div className="p-3.5 mb-1" style={{ background: C.card, borderRadius: 18, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                       <div className="flex items-center gap-1.5 mb-2.5">
                         <Award size={14} color={C.tan} />
                         <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Personal records</span>
                       </div>
                       <div className="flex gap-2" style={{ overflowX: "auto" }}>
                         {Object.values(personalRecords).map((r) => (
-                          <div key={r.name} className="flex-shrink-0 px-3 py-2" style={{ background: C.tanTint, borderRadius: 12, minWidth: 110 }}>
-                            <div className="ft-body" style={{ fontSize: 12, color: C.ink, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 130 }}>{r.name}</div>
+                          <div key={r.name} className="flex-shrink-0 px-3 py-2" style={{ background: C.tanTint, borderRadius: 14, minWidth: 110 }}>
+                            <div className="ft-body" style={{ fontSize: 11, color: C.ink, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 130 }}>{r.name}</div>
                             <div className="ft-mono" style={{ fontSize: 13, fontWeight: 700, color: C.tan }}>{r.weight}kg × {r.reps}</div>
                           </div>
                         ))}
@@ -2358,24 +2178,24 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                     const overload = computeProgressiveOverload(e, exerciseLogs.filter((x) => x.timestamp < e.timestamp));
                     return (
                       <SwipeRow key={e.id} onEdit={() => openEdit("exercise", e)} onDuplicate={() => duplicateExercise(e)} onDelete={() => deleteExercise(e.id)}>
-                      <div className={"p-3.5" + (e.id === justAddedId ? " anim-row-flash" : "")} style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                      <div className={"p-3.5" + (e.id === justAddedId ? " anim-row-flash" : "")} style={{ background: C.card, borderRadius: 18, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3 min-w-0">
                             <div style={{ width: 38, height: 38, borderRadius: "50%", background: C.blueTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                               {e.type === "strength" ? <Dumbbell size={15} color={C.blue} /> : <Activity size={15} color={C.blue} />}
                             </div>
                             <div className="min-w-0">
-                              <div className="ft-body" style={{ fontSize: 15, fontWeight: 600, color: C.ink }}>{e.name}</div>
-                              <div className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>
+                              <div className="ft-body" style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>{e.name}</div>
+                              <div className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>
                                 {fmtDateTime(e.timestamp)} · {e.type === "strength" ? `${e.sets.length} sets · ${Math.round(volume)} kg volume` : `${e.duration_min}min · ${e.distance_km}km`}
                               </div>
                               {overload && overload.isPR && (
-                                <div className="flex items-center gap-1 mt-1"><Award size={11} color={C.tan} /><span className="ft-body" style={{ fontSize: 12, color: C.tan, fontWeight: 700 }}>New PR</span></div>
+                                <div className="flex items-center gap-1 mt-1"><Award size={11} color={C.tan} /><span className="ft-body" style={{ fontSize: 10.5, color: C.tan, fontWeight: 700 }}>New PR</span></div>
                               )}
                               {overload && !overload.isPR && !overload.isNew && overload.deltaWeight !== 0 && (
                                 <div className="flex items-center gap-1 mt-1">
                                   {overload.deltaWeight > 0 ? <TrendingUp size={11} color={C.green} /> : <TrendingDown size={11} color={C.pink} />}
-                                  <span className="ft-body" style={{ fontSize: 12, color: overload.deltaWeight > 0 ? C.green : C.pink, fontWeight: 600 }}>
+                                  <span className="ft-body" style={{ fontSize: 10.5, color: overload.deltaWeight > 0 ? C.green : C.pink, fontWeight: 600 }}>
                                     {overload.deltaWeight > 0 ? "+" : ""}{Math.round(overload.deltaWeight * 10) / 10}kg top set vs last time
                                   </span>
                                 </div>
@@ -2387,7 +2207,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                           <div className="mt-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.line}` }}>
                             <div className="flex items-center justify-between mb-1.5">
                               <TrendBadge trend={e.ai.trend} />
-                              <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>~{e.ai.estimated_calories} kcal burned</span>
+                              <span className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>~{e.ai.estimated_calories} kcal burned</span>
                             </div>
                             <div className="ft-body" style={{ fontSize: 12, color: C.ink, lineHeight: 1.4 }}>{e.ai.progression_suggestion}</div>
                           </div>
@@ -2404,8 +2224,6 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
 
         {tab === "charts" && (
           <div>
-            <WeeklyConsistencyRow days={weeklyConsistency} />
-
             {insights.length > 0 && (
               <div className="flex flex-col gap-2 mb-4">
                 {insights.map((ins, i) => (
@@ -2425,40 +2243,37 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
 
             {chartsSubTab === "nutrition" ? (
               <>
-                <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
-                  <div className="flex items-center gap-1" style={{ background: C.bgBottom, borderRadius: 12, padding: 3, marginBottom: 12 }}>
-                    {NUTRITION_CHART_METRICS.map((m) => (
-                      <button key={m.key} onClick={() => setNutritionChartMetric(m.key)} className="flex-1 ft-body"
-                        style={{
-                          padding: "7px 0", borderRadius: 12, border: "none",
-                          background: nutritionChartMetric === m.key ? C.card : "transparent",
-                          color: nutritionChartMetric === m.key ? m.color : C.inkSoft,
-                          fontSize: 12.5, fontWeight: 700,
-                          boxShadow: nutritionChartMetric === m.key ? "0 1px 4px rgba(20,20,20,0.08)" : "none",
-                          transition: "background .25s ease, color .25s ease, box-shadow .25s ease",
-                        }}>{m.label}</button>
-                    ))}
-                  </div>
-                  {(() => {
-                    const active = NUTRITION_CHART_METRICS.find((m) => m.key === nutritionChartMetric);
-                    return (
-                      <ResponsiveContainer width="100%" height={150}>
-                        <BarChart data={last14}>
-                          <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
-                          <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} interval={2} />
-                          <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={30} />
-                          <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }}
-                            formatter={(value) => [`${Math.round(value)}${active.unit}`, active.label]} />
-                          <Bar dataKey={active.key} fill={active.color} radius={[3, 3, 0, 0]} isAnimationActive animationDuration={350} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    );
-                  })()}
+                <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                  <div className="ft-body mb-2" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Calories vs. goal</div>
+                  <ResponsiveContainer width="100%" height={150}>
+                    <BarChart data={last14}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+                      <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} interval={2} />
+                      <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={30} />
+                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
+                      <Bar dataKey="calories" fill={C.orange} radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
-                <div className="p-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                  <div className="ft-body mb-2" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Macros (g/day)</div>
+                  <ResponsiveContainer width="100%" height={150}>
+                    <LineChart data={last14}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+                      <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} interval={2} />
+                      <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={30} />
+                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      <Line type="monotone" dataKey="protein" stroke={C.purple} strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="carbs" stroke={C.tan} strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="fat" stroke={C.pink} strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="p-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                   <div className="flex items-center justify-between mb-2">
                     <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Weight</span>
-                    {goals.targetWeight > 0 && <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>Goal: {goals.targetWeight}</span>}
+                    {goals.targetWeight > 0 && <span className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>Goal: {goals.targetWeight}</span>}
                   </div>
                   {weightSeries.length === 0 ? <EmptyState text="Log a weight entry in Profile to see your trend." compact /> : (
                     <>
@@ -2467,32 +2282,32 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                           <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
                           <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} />
                           <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={34} domain={["dataMin - 2", "dataMax + 2"]} />
-                          <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
+                          <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
                           {goals.targetWeight > 0 && (
                             <ReferenceLine y={goals.targetWeight} stroke={C.green} strokeDasharray="4 4" strokeWidth={1.5}
-                              label={{ value: "Goal", position: "insideTopRight", fill: C.green, fontSize: 12 }} />
+                              label={{ value: "Goal", position: "insideTopRight", fill: C.green, fontSize: 10 }} />
                           )}
                           <Line type="monotone" dataKey="weight" stroke={C.ink} strokeWidth={2} dot={{ r: 3 }} />
                         </LineChart>
                       </ResponsiveContainer>
                       <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
                         {!weightPace ? (
-                          <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Log at least 2 weigh-ins to see a pace projection.</span>
+                          <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>Log at least 2 weigh-ins to see a pace projection.</span>
                         ) : !goals.targetWeight ? (
-                          <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Currently {weightPace.paceKgPerWeek > 0 ? "gaining" : weightPace.paceKgPerWeek < 0 ? "losing" : "holding steady at"} {Math.abs(weightPace.paceKgPerWeek).toFixed(2)}/week. Set a goal weight in Profile to see a projection.</span>
+                          <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>Currently {weightPace.paceKgPerWeek > 0 ? "gaining" : weightPace.paceKgPerWeek < 0 ? "losing" : "holding steady at"} {Math.abs(weightPace.paceKgPerWeek).toFixed(2)}/week. Set a goal weight in Profile to see a projection.</span>
                         ) : !weightProjection ? (
-                          <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Weight has been stable — no clear pace to project from yet.</span>
+                          <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>Weight has been stable — no clear pace to project from yet.</span>
                         ) : weightProjection.onTrack ? (
-                          <span className="ft-body" style={{ fontSize: 12.5, color: C.green, fontWeight: 600 }}>On pace ({weightPace.paceKgPerWeek > 0 ? "+" : ""}{weightPace.paceKgPerWeek.toFixed(2)}/week) to reach your goal in ~{weightProjection.weeks} weeks.</span>
+                          <span className="ft-body" style={{ fontSize: 11.5, color: C.green, fontWeight: 600 }}>On pace ({weightPace.paceKgPerWeek > 0 ? "+" : ""}{weightPace.paceKgPerWeek.toFixed(2)}/week) to reach your goal in ~{weightProjection.weeks} weeks.</span>
                         ) : (
-                          <span className="ft-body" style={{ fontSize: 12.5, color: C.pink, fontWeight: 600 }}>Current pace ({weightPace.paceKgPerWeek > 0 ? "+" : ""}{weightPace.paceKgPerWeek.toFixed(2)}/week) is moving away from your goal.</span>
+                          <span className="ft-body" style={{ fontSize: 11.5, color: C.pink, fontWeight: 600 }}>Current pace ({weightPace.paceKgPerWeek > 0 ? "+" : ""}{weightPace.paceKgPerWeek.toFixed(2)}/week) is moving away from your goal.</span>
                         )}
                       </div>
                     </>
                   )}
                 </div>
 
-                <div className="p-4 mt-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                <div className="p-4 mt-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                   <div className="ft-body mb-3" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Micronutrients today</div>
                   {todayLogs.length === 0 ? <EmptyState text="Log a meal to see today's micronutrient breakdown." compact /> : (
                     <div className="flex flex-col gap-2.5">
@@ -2500,21 +2315,21 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                         <div key={m.key}>
                           <div className="flex items-center justify-between mb-1">
                             <span className="ft-body" style={{ fontSize: 12, color: C.ink, fontWeight: 500 }}>{m.label}</span>
-                            <span className="ft-mono" style={{ fontSize: 12.5, color: C.inkSoft }}>{m.value}{m.unit}</span>
+                            <span className="ft-mono" style={{ fontSize: 11.5, color: C.inkSoft }}>{m.value}{m.unit}</span>
                           </div>
                           <div style={{ height: 6, borderRadius: 3, background: C.track, overflow: "hidden" }}>
                             <div style={{ height: "100%", width: `${clamp(m.pct, 0, 100)}%`, background: m.capIsLimit && m.pct > 100 ? C.pink : m.color, borderRadius: 3, transition: "width .4s ease" }} />
                           </div>
                         </div>
                       ))}
-                      <div className="ft-body" style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>Calcium, iron, B12, vitamin D & potassium are estimated from the AI's per-meal %DV values.</div>
+                      <div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft, marginTop: 2 }}>Calcium, iron, B12, vitamin D & potassium are estimated from the AI's per-meal %DV values.</div>
                     </div>
                   )}
                 </div>
               </>
             ) : chartsSubTab === "exercise" ? (
               <>
-                <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                   <div className="ft-body mb-2" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Training volume (kg/day)</div>
                   {exerciseLogs.length === 0 ? <EmptyState text="Log a workout to see your volume trend." compact /> : (
                     <ResponsiveContainer width="100%" height={150}>
@@ -2522,13 +2337,13 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                         <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
                         <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} interval={2} />
                         <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={34} />
-                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
+                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
                         <Bar dataKey="volume" fill={C.blue} radius={[3, 3, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   )}
                 </div>
-                <div className="p-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                <div className="p-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                   <div className="ft-body mb-2" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Estimated calories burned</div>
                   {exerciseLogs.length === 0 ? <EmptyState text="Get AI feedback on a workout to estimate calories burned." compact /> : (
                     <ResponsiveContainer width="100%" height={150}>
@@ -2536,7 +2351,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                         <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
                         <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} interval={2} />
                         <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={30} />
-                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
+                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
                         <Bar dataKey="burned" fill={C.pink} radius={[3, 3, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
@@ -2551,7 +2366,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                 </div>
 
                 {chartsPeriod === "week" ? (
-                  <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                  <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                     <div className="flex items-center gap-2 mb-2.5">
                       <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.blueTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                         <BarChart3 size={15} color={C.blue} />
@@ -2572,7 +2387,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                             <span className="ft-body" style={{ fontSize: 12, color: C.ink, lineHeight: 1.4 }}><span style={{ fontWeight: 700 }}>Focus next week: </span>{weeklyReview.focusNextWeek}</span>
                           </div>
                         )}
-                        <button onClick={generateWeeklyReview} className="ft-body" style={{ fontSize: 12.5, color: C.blue, fontWeight: 600 }}>Refresh</button>
+                        <button onClick={generateWeeklyReview} className="ft-body" style={{ fontSize: 11.5, color: C.blue, fontWeight: 600 }}>Refresh</button>
                       </>
                     ) : (
                       <>
@@ -2584,10 +2399,10 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                         </button>
                       </>
                     )}
-                    {weeklyReviewError && <div className="ft-body mt-2" style={{ fontSize: 12.5, color: C.pink }}>{weeklyReviewError}</div>}
+                    {weeklyReviewError && <div className="ft-body mt-2" style={{ fontSize: 11.5, color: C.pink }}>{weeklyReviewError}</div>}
                   </div>
                 ) : (
-                  <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                  <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                     <div className="flex items-center gap-2 mb-2.5">
                       <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.purpleTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                         <CalendarDays size={15} color={C.purple} />
@@ -2608,7 +2423,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                             <span className="ft-body" style={{ fontSize: 12, color: C.ink, lineHeight: 1.4 }}><span style={{ fontWeight: 700 }}>Focus next month: </span>{monthlyReview.focusNextMonth}</span>
                           </div>
                         )}
-                        <button onClick={generateMonthlyReview} className="ft-body" style={{ fontSize: 12.5, color: C.purple, fontWeight: 600 }}>Refresh</button>
+                        <button onClick={generateMonthlyReview} className="ft-body" style={{ fontSize: 11.5, color: C.purple, fontWeight: 600 }}>Refresh</button>
                       </>
                     ) : (
                       <>
@@ -2620,43 +2435,43 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                         </button>
                       </>
                     )}
-                    {monthlyReviewError && <div className="ft-body mt-2" style={{ fontSize: 12.5, color: C.pink }}>{monthlyReviewError}</div>}
+                    {monthlyReviewError && <div className="ft-body mt-2" style={{ fontSize: 11.5, color: C.pink }}>{monthlyReviewError}</div>}
                   </div>
                 )}
-                <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Avg calories/day</span>
                     <TrendArrow trend={periodSummary.calorieTrend} />
                   </div>
                   <div className="ft-display" style={{ fontSize: 30, fontWeight: 700, color: C.ink }}>{periodSummary.avgCalories}<span className="ft-body" style={{ fontSize: 13, color: C.inkSoft, fontWeight: 500 }}> / {goals.calories} kcal</span></div>
-                  <div className="ft-body" style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>{periodSummary.daysLogged} of {chartsPeriod === "week" ? 7 : 30} days logged</div>
+                  <div className="ft-body" style={{ fontSize: 11, color: C.inkSoft, marginTop: 2 }}>{periodSummary.daysLogged} of {chartsPeriod === "week" ? 7 : 30} days logged</div>
                 </div>
                 <div className="flex gap-2.5 mb-4">
-                  <div className="flex-1 p-3" style={{ background: C.card, borderRadius: 16 }}>
-                    <div className="flex items-center justify-between mb-1"><span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>Protein</span><TrendArrow trend={periodSummary.proteinTrend} size={11} /></div>
+                  <div className="flex-1 p-3" style={{ background: C.card, borderRadius: 18 }}>
+                    <div className="flex items-center justify-between mb-1"><span className="ft-body" style={{ fontSize: 11, color: C.inkSoft, fontWeight: 600 }}>Protein</span><TrendArrow trend={periodSummary.proteinTrend} size={11} /></div>
                     <div className="ft-mono" style={{ fontSize: 16, fontWeight: 700, color: C.purple }}>{periodSummary.avgProtein}g</div>
                   </div>
-                  <div className="flex-1 p-3" style={{ background: C.card, borderRadius: 16 }}>
-                    <div className="flex items-center justify-between mb-1"><span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>Carbs</span><TrendArrow trend={periodSummary.carbsTrend} size={11} /></div>
+                  <div className="flex-1 p-3" style={{ background: C.card, borderRadius: 18 }}>
+                    <div className="flex items-center justify-between mb-1"><span className="ft-body" style={{ fontSize: 11, color: C.inkSoft, fontWeight: 600 }}>Carbs</span><TrendArrow trend={periodSummary.carbsTrend} size={11} /></div>
                     <div className="ft-mono" style={{ fontSize: 16, fontWeight: 700, color: C.tan }}>{periodSummary.avgCarbs}g</div>
                   </div>
-                  <div className="flex-1 p-3" style={{ background: C.card, borderRadius: 16 }}>
-                    <div className="flex items-center justify-between mb-1"><span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>Fat</span><TrendArrow trend={periodSummary.fatTrend} size={11} /></div>
+                  <div className="flex-1 p-3" style={{ background: C.card, borderRadius: 18 }}>
+                    <div className="flex items-center justify-between mb-1"><span className="ft-body" style={{ fontSize: 11, color: C.inkSoft, fontWeight: 600 }}>Fat</span><TrendArrow trend={periodSummary.fatTrend} size={11} /></div>
                     <div className="ft-mono" style={{ fontSize: 16, fontWeight: 700, color: C.pink }}>{periodSummary.avgFat}g</div>
                   </div>
                 </div>
                 <div className="flex gap-2.5 mb-4">
-                  <div className="flex-1 flex items-center gap-2.5 p-3.5" style={{ background: C.card, borderRadius: 16 }}>
-                    <div style={{ width: 34, height: 34, borderRadius: 12, background: C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Trophy size={16} color={C.pink} /></div>
-                    <div><div className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>{streak}</div><div className="ft-body" style={{ fontSize: 12, color: C.inkSoft }}>current streak</div></div>
+                  <div className="flex-1 flex items-center gap-2.5 p-3.5" style={{ background: C.card, borderRadius: 18 }}>
+                    <div style={{ width: 34, height: 34, borderRadius: 10, background: C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Trophy size={16} color={C.pink} /></div>
+                    <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{streak}</div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>current streak</div></div>
                   </div>
-                  <div className="flex-1 flex items-center gap-2.5 p-3.5" style={{ background: C.card, borderRadius: 16 }}>
-                    <div style={{ width: 34, height: 34, borderRadius: 12, background: C.tanTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Trophy size={16} color={C.tan} /></div>
-                    <div><div className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>{bestStreak}</div><div className="ft-body" style={{ fontSize: 12, color: C.inkSoft }}>best streak</div></div>
+                  <div className="flex-1 flex items-center gap-2.5 p-3.5" style={{ background: C.card, borderRadius: 18 }}>
+                    <div style={{ width: 34, height: 34, borderRadius: 10, background: C.tanTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Trophy size={16} color={C.tan} /></div>
+                    <div><div className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{bestStreak}</div><div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>best streak</div></div>
                   </div>
                 </div>
 
-                <div className="p-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                <div className="p-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                   <div className="ft-body mb-3" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Weekly goal achievement</div>
                   <div className="mb-3.5">
                     <div className="flex items-center justify-between mb-1.5">
@@ -2721,23 +2536,13 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
         <NavBtn active={tab === "charts"} onClick={() => setTab("charts")} icon={BarChart3} label="Insights" />
         <NavBtn active={tab === "profile"} onClick={() => setTab("profile")} icon={User} label="Profile" />
       </div>
-      <button
-        onClick={() => openAdd("meal", "photo")}
-        onPointerDown={() => setFabPressed(true)}
-        onPointerUp={() => setFabPressed(false)}
-        onPointerLeave={() => setFabPressed(false)}
-        onPointerCancel={() => setFabPressed(false)}
-        className="absolute flex items-center justify-center fab-pill"
+      <button onClick={() => openAdd("meal", "photo")} className="absolute flex items-center justify-center"
         style={{
-          left: "50%",
-          transform: fabPressed ? "translateX(-50%) translateY(-8px) scale(1.1)" : "translateX(-50%)",
+          left: "50%", transform: "translateX(-50%)",
           bottom: "calc(46px + env(safe-area-inset-bottom, 0px))",
           width: 52, height: 52, borderRadius: "50%",
           background: `linear-gradient(135deg, ${C.orange}, ${C.orangeDeep})`,
-          boxShadow: fabPressed
-            ? "0 16px 30px rgba(238,108,55,0.48), 0 4px 12px rgba(238,108,55,0.36)"
-            : "0 8px 18px rgba(238,108,55,0.4), 0 2px 6px rgba(238,108,55,0.3)",
-          border: "none",
+          boxShadow: "0 8px 18px rgba(238,108,55,0.4), 0 2px 6px rgba(238,108,55,0.3)",
         }}>
         <Plus size={24} color="#fff" strokeWidth={2.4} />
       </button>
@@ -2777,9 +2582,9 @@ function AddLogSheet({ initialLogType, initialMode, goals, todayTotals, todayLog
 
   return (
     <div className="absolute inset-0 flex flex-col justify-end" style={{ background: "rgba(21,23,27,0.4)" }} onClick={onClose}>
-      <div className="flex flex-col" style={{ background: C.bgBottom, borderRadius: "24px 24px 0 0", maxHeight: "90%", boxShadow: "0 -8px 30px rgba(0,0,0,0.2)" }} onClick={(e) => e.stopPropagation()}>
+      <div className="flex flex-col" style={{ background: C.bgBottom, borderRadius: "28px 28px 0 0", maxHeight: "90%", boxShadow: "0 -8px 30px rgba(0,0,0,0.2)" }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 pt-4 pb-2">
-          <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>{isEditing ? (logType === "meal" ? "Edit meal" : "Edit workout") : "Add a log"}</span>
+          <span className="ft-display" style={{ fontSize: 18, fontWeight: 700, color: C.ink }}>{isEditing ? (logType === "meal" ? "Edit meal" : "Edit workout") : "Add a log"}</span>
           <button onClick={onClose} style={{ width: 30, height: 30, borderRadius: "50%", background: C.card, display: "flex", alignItems: "center", justifyContent: "center" }}><X size={15} color={C.ink} /></button>
         </div>
         {!isEditing && (
@@ -2824,10 +2629,6 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   });
   const [photoInputId] = useState(() => "meal-photo-" + uid());
   const [compressing, setCompressing] = useState(false);
-  // A tiny (thumbnail-sized) copy of the photo, saved onto the log entry itself
-  // so meal cards can show a small preview — kept separate from imagePreview
-  // (which stays large enough for the AI to actually analyze).
-  const [photoThumb, setPhotoThumb] = useState(editingEntry && editingEntry.photo_thumb ? editingEntry.photo_thumb : null);
 
   async function handleImagePick(e) {
     const file = e.target.files && e.target.files[0];
@@ -2844,12 +2645,6 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     } finally {
       setCompressing(false);
     }
-    // Best-effort tiny thumbnail for the meal card — failure here shouldn't
-    // block logging, so it's just skipped if it doesn't work out.
-    try {
-      const thumb = await compressImageFile(file, { maxDimension: 96, quality: 0.55 });
-      setPhotoThumb(`data:${thumb.mediaType};base64,${thumb.b64}`);
-    } catch { /* thumbnail is optional — ignore failures */ }
   }
 
   async function analyze(overrideDescription) {
@@ -3003,7 +2798,6 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       timestamp: editingEntry ? editingEntry.timestamp : Date.now(),
       source: editingEntry ? editingEntry.source : mode,
       ...pending,
-      photo_thumb: photoThumb || (editingEntry ? editingEntry.photo_thumb : null) || null,
     });
   }
 
@@ -3033,13 +2827,13 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
         <>
           {quickPicks.length > 0 && (
             <div className="mb-4">
-              <div className="ft-body mb-1.5" style={{ fontSize: 12.5, fontWeight: 700, color: C.inkSoft, letterSpacing: 0.5, textTransform: "uppercase" }}>Quick log</div>
+              <div className="ft-body mb-1.5" style={{ fontSize: 11.5, fontWeight: 700, color: C.inkSoft, letterSpacing: 0.5, textTransform: "uppercase" }}>Quick log</div>
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {quickPicks.map((m, i) => (
-                  <div key={m.id || i} className="flex flex-col gap-1.5 p-2.5 flex-shrink-0" style={{ background: C.card, borderRadius: 12, minWidth: 128, border: `1px solid ${C.line}` }}>
+                  <div key={m.id || i} className="flex flex-col gap-1.5 p-2.5 flex-shrink-0" style={{ background: C.card, borderRadius: 14, minWidth: 128, border: `1px solid ${C.line}` }}>
                     <button onClick={() => quickLog(m)} className="text-left">
                       <div className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 140 }}>{m.food_name}</div>
-                      <div className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>{Math.round(num(m.calories))} kcal</div>
+                      <div className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>{Math.round(num(m.calories))} kcal</div>
                     </button>
                     <button onClick={() => onToggleFavorite && onToggleFavorite(m)} className="self-end">
                       <Star size={13} color={C.tan} fill={isFav(m.food_name) ? C.tan : "none"} />
@@ -3083,7 +2877,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
                   <Mic size={14} color={listening ? "#fff" : C.orange} className={listening ? "animate-pulse" : ""} />
                 </button>
               )}
-              {listening && <div className="ft-body mt-1.5" style={{ fontSize: 12, color: C.pink }}>Listening… speak naturally, e.g. "2 rotis, one bowl dal, and 100 grams paneer"</div>}
+              {listening && <div className="ft-body mt-1.5" style={{ fontSize: 11, color: C.pink }}>Listening… speak naturally, e.g. "2 rotis, one bowl dal, and 100 grams paneer"</div>}
             </div>
           )}
           {error && (<div className="flex items-start gap-2 p-2.5 mb-3 rounded-xl" style={{ background: C.pinkTint }}><AlertCircle size={15} color={C.pink} style={{ flexShrink: 0, marginTop: 1 }} /><span className="ft-body" style={{ fontSize: 12, color: C.pink }}>{error}</span></div>)}
@@ -3099,7 +2893,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
         <div>
           <div className="flex items-start justify-between gap-2 mb-1">
             <input value={pending.food_name} onChange={(e) => updateField("food_name", e.target.value)} placeholder="Meal name" className="flex-1 ft-display"
-              style={{ fontSize: 20, fontWeight: 700, color: C.ink, background: "transparent", border: "none", outline: "none", borderBottom: `1px solid ${C.line}`, paddingBottom: 4 }} />
+              style={{ fontSize: 18, fontWeight: 700, color: C.ink, background: "transparent", border: "none", outline: "none", borderBottom: `1px solid ${C.line}`, paddingBottom: 4 }} />
             <button onClick={() => onToggleFavorite && onToggleFavorite(pending)} className="p-1.5" style={{ flexShrink: 0 }} title="Favorite this meal">
               <Star size={18} color={C.tan} fill={isFav(pending.food_name) ? C.tan : "none"} />
             </button>
@@ -3112,7 +2906,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
               <div className="flex items-center gap-2 flex-wrap">
                 <ConfidenceBadge level={pending.confidence} />
                 {pending.estimate_basis && (
-                  <button onClick={() => setShowWhyEstimate((s) => !s)} className="ft-body flex items-center gap-1" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>
+                  <button onClick={() => setShowWhyEstimate((s) => !s)} className="ft-body flex items-center gap-1" style={{ fontSize: 11, color: C.inkSoft, fontWeight: 600 }}>
                     Why this estimate? <ChevronDown size={11} style={{ transform: showWhyEstimate ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
                   </button>
                 )}
@@ -3231,7 +3025,7 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry, splits }) {
         <div className="mb-3">
           <div className="flex items-center gap-1.5 mb-2">
             <Layers size={13} color={C.inkSoft} />
-            <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>{activeSplit.name}</span>
+            <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft, fontWeight: 600 }}>{activeSplit.name}</span>
           </div>
           <div className="flex gap-1.5 mb-2" style={{ overflowX: "auto" }}>
             {activeSplit.days.map((d) => (
@@ -3243,14 +3037,14 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry, splits }) {
           </div>
           {splitDay && (
             splitDay.exercises.length === 0 ? (
-              <div className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>No exercises added to this day yet — edit your split in Profile.</div>
+              <div className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>No exercises added to this day yet — edit your split in Profile.</div>
             ) : (
               <div className="flex flex-wrap gap-1.5">
                 {splitDay.exercises.map((ex, i) => {
                   const doneToday = exerciseLogs.some((e) => e.date === todayStr() && e.name.trim().toLowerCase() === ex.trim().toLowerCase());
                   return (
                     <button key={i} onClick={() => setName(ex)} className="flex items-center gap-1 px-2.5 py-1.5 rounded-full ft-body"
-                      style={{ background: name === ex ? C.ink : doneToday ? C.greenTint : C.card, color: name === ex ? C.onInk : doneToday ? C.green : C.ink, fontSize: 12.5, fontWeight: 500 }}>
+                      style={{ background: name === ex ? C.ink : doneToday ? C.greenTint : C.card, color: name === ex ? C.onInk : doneToday ? C.green : C.ink, fontSize: 11.5, fontWeight: 500 }}>
                       {doneToday && <Check size={11} />}{ex}
                     </button>
                   );
@@ -3285,18 +3079,18 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry, splits }) {
       {exType === "strength" ? (
         <div className="mb-3">
           <div className="flex items-center justify-between mb-2">
-            <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.inkSoft, letterSpacing: 0.5, textTransform: "uppercase" }}>Sets</span>
-            <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>kg × reps</span>
+            <span className="ft-body" style={{ fontSize: 11.5, fontWeight: 700, color: C.inkSoft, letterSpacing: 0.5, textTransform: "uppercase" }}>Sets</span>
+            <span className="ft-mono" style={{ fontSize: 10.5, color: C.inkSoft }}>kg × reps</span>
           </div>
           <div className="flex flex-col gap-2">
             {sets.map((s, i) => (
               <div key={i} className="flex items-center gap-2 p-2.5" style={{ background: C.card, borderRadius: 16 }}>
-                <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft, width: 16 }}>{i + 1}</span>
+                <span className="ft-mono" style={{ fontSize: 11, color: C.inkSoft, width: 16 }}>{i + 1}</span>
                 <input type="number" inputMode="decimal" value={s.weight} onChange={(e) => updateSet(i, "weight", e.target.value)} placeholder="Weight"
-                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 12, padding: "8px 6px", border: "none", outline: "none", fontSize: 13 }} />
+                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 10, padding: "8px 6px", border: "none", outline: "none", fontSize: 13 }} />
                 <span className="ft-body" style={{ color: C.inkSoft, fontSize: 12 }}>×</span>
                 <input type="number" inputMode="numeric" value={s.reps} onChange={(e) => updateSet(i, "reps", e.target.value)} placeholder="Reps"
-                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 12, padding: "8px 6px", border: "none", outline: "none", fontSize: 13 }} />
+                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 10, padding: "8px 6px", border: "none", outline: "none", fontSize: 13 }} />
                 {sets.length > 1 && <button onClick={() => removeSet(i)}><X size={14} color={C.inkSoft} /></button>}
               </div>
             ))}
@@ -3329,15 +3123,15 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry, splits }) {
       )}
 
       {ai && (
-        <div className="p-4 mb-3" style={{ background: C.card, borderRadius: 16 }}>
+        <div className="p-4 mb-3" style={{ background: C.card, borderRadius: 18 }}>
           <div className="flex items-center justify-between mb-2">
             <TrendBadge trend={ai.trend} />
-            <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>~{ai.estimated_calories} kcal</span>
+            <span className="ft-mono" style={{ fontSize: 11, color: C.inkSoft }}>~{ai.estimated_calories} kcal</span>
           </div>
           {ai.muscle_groups.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-2.5">
               {ai.muscle_groups.map((m, i) => (
-                <span key={i} className="ft-body px-2 py-1" style={{ background: C.blueTint, color: C.blue, borderRadius: 999, fontSize: 12, fontWeight: 600 }}>{m}</span>
+                <span key={i} className="ft-body px-2 py-1" style={{ background: C.blueTint, color: C.blue, borderRadius: 20, fontSize: 10.5, fontWeight: 600 }}>{m}</span>
               ))}
             </div>
           )}
@@ -3348,7 +3142,7 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry, splits }) {
               <span className="ft-body" style={{ fontSize: 12, color: C.ink, lineHeight: 1.4 }}>{ai.progression_suggestion}</span>
             </div>
           )}
-          {ai.form_tip && <div className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.4, fontStyle: "italic" }}>Cue: {ai.form_tip}</div>}
+          {ai.form_tip && <div className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft, lineHeight: 1.4, fontStyle: "italic" }}>Cue: {ai.form_tip}</div>}
         </div>
       )}
 
@@ -3356,7 +3150,7 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry, splits }) {
         {ai && <button onClick={() => setAi(null)} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.card, color: C.ink, fontSize: 14, fontWeight: 600 }}><X size={16} /> Redo</button>}
         <button onClick={save} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.blue, color: "#fff", fontSize: 14, fontWeight: 600 }}><Check size={16} /> {editingEntry ? "Save changes" : "Save workout"}</button>
       </div>
-      {!ai && <div className="ft-body text-center mt-2" style={{ fontSize: 12.5, color: C.inkSoft }}>You can save without AI feedback too.</div>}
+      {!ai && <div className="ft-body text-center mt-2" style={{ fontSize: 11.5, color: C.inkSoft }}>You can save without AI feedback too.</div>}
     </div>
   );
 }
@@ -3383,7 +3177,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
       <div className="mb-3">
         <div className="flex items-baseline justify-between mb-1">
           <span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{label}</span>
-          <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>{unit}</span>
+          <span className="ft-mono" style={{ fontSize: 11, color: C.inkSoft }}>{unit}</span>
         </div>
         <input type="number" value={local[key]} onChange={(e) => { setLocal((p) => ({ ...p, [key]: num(e.target.value) })); setSaved(false); }}
           className="w-full p-3 rounded-2xl ft-mono" style={{ border: "none", background: C.card, color: C.ink, fontSize: 16, outline: "none" }} />
@@ -3395,7 +3189,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
     <div>      
     <div
       className="flex items-center justify-between p-4 mb-4"
-      style={{ background: C.card, borderRadius: 16 }}
+      style={{ background: C.card, borderRadius: 18 }}
     >
       <span
         className="ft-body"
@@ -3436,7 +3230,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
       </button>
     </div>
 
-      <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16 }}>
+      <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 18 }}>
         <div className="flex items-center justify-between mb-1">
           <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Daily goals</span>
           <button onClick={toggleGoalsEditing} className="flex items-center gap-1 ft-body" style={{ fontSize: 12, fontWeight: 600, color: goalsEditing ? C.inkSoft : C.orange }}>
@@ -3456,7 +3250,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
               ...(goals.targetWeight > 0 ? [{ label: "Goal weight", value: `${goals.targetWeight}kg` }] : []),
             ].map((g) => (
               <div key={g.label}>
-                <div className="ft-body" style={{ fontSize: 12, color: C.inkSoft }}>{g.label}</div>
+                <div className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>{g.label}</div>
                 <div className="ft-mono" style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{g.value}</div>
               </div>
             ))}
@@ -3489,7 +3283,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
         </div>
       )}
 
-      <button onClick={() => setExerciseSettingsOpen((o) => !o)} className="w-full flex items-center justify-between p-4 mt-6" style={{ background: C.card, borderRadius: 16 }}>
+      <button onClick={() => setExerciseSettingsOpen((o) => !o)} className="w-full flex items-center justify-between p-4 mt-6" style={{ background: C.card, borderRadius: 18 }}>
         <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Exercise settings</span>
         <ChevronDown size={16} color={C.inkSoft} style={{ transform: exerciseSettingsOpen ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
       </button>
@@ -3529,12 +3323,12 @@ function WorkoutSplitEditor({ splits, onSave }) {
   }
 
   return (
-    <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 16 }}>
+    <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 18 }}>
       <input value={split.name} onChange={(e) => updateSplit({ ...split, name: e.target.value })} placeholder="Split name"
         className="w-full ft-body mb-3" style={{ fontSize: 14, fontWeight: 700, color: C.ink, background: "transparent", border: "none", outline: "none" }} />
       <div className="flex flex-col gap-3">
         {split.days.map((day) => (
-          <div key={day.id} className="p-3" style={{ background: C.bgBottom, borderRadius: 12 }}>
+          <div key={day.id} className="p-3" style={{ background: C.bgBottom, borderRadius: 14 }}>
             <div className="flex items-center justify-between mb-2 gap-2">
               <input value={day.label} onChange={(e) => updateDay(day.id, { label: e.target.value })} placeholder="Day label"
                 className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.ink, background: "transparent", border: "none", outline: "none", flex: 1, minWidth: 0 }} />
@@ -3544,7 +3338,7 @@ function WorkoutSplitEditor({ splits, onSave }) {
               <div className="flex flex-wrap gap-1.5 mb-2">
                 {day.exercises.map((ex, i) => (
                   <div key={i} className="flex items-center gap-1 pl-2.5 pr-1.5 py-1.5 rounded-full" style={{ background: C.card }}>
-                    <span className="ft-body" style={{ fontSize: 12.5, color: C.ink }}>{ex}</span>
+                    <span className="ft-body" style={{ fontSize: 11.5, color: C.ink }}>{ex}</span>
                     <button onClick={() => removeExercise(day.id, i)} className="flex items-center justify-center" style={{ width: 16, height: 16 }}><X size={10} color={C.inkSoft} /></button>
                   </div>
                 ))}
@@ -3553,8 +3347,8 @@ function WorkoutSplitEditor({ splits, onSave }) {
             <div className="flex gap-1.5">
               <input value={newExerciseText[day.id] || ""} onChange={(e) => setNewExerciseText((p) => ({ ...p, [day.id]: e.target.value }))}
                 onKeyDown={(e) => { if (e.key === "Enter") addExercise(day.id); }}
-                placeholder="Add exercise" className="flex-1 ft-body" style={{ fontSize: 12, color: C.ink, background: C.card, border: "none", borderRadius: 12, padding: "7px 10px", outline: "none" }} />
-              <button onClick={() => addExercise(day.id)} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: 12, background: C.orangeTint, flexShrink: 0 }}><Plus size={14} color={C.orange} /></button>
+                placeholder="Add exercise" className="flex-1 ft-body" style={{ fontSize: 12, color: C.ink, background: C.card, border: "none", borderRadius: 10, padding: "7px 10px", outline: "none" }} />
+              <button onClick={() => addExercise(day.id)} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: 10, background: C.orangeTint, flexShrink: 0 }}><Plus size={14} color={C.orange} /></button>
             </div>
           </div>
         ))}
