@@ -17,7 +17,7 @@ import {
   Trash2, Loader2, TrendingUp, TrendingDown, Minus, X, Check,
   Flame, Trophy, Dumbbell, Wheat, Droplet, AlertCircle, Home, Activity, Sparkles,
   Star, Pencil, Copy, Droplets, ChevronLeft, ChevronRight, ChevronDown, CalendarDays, Gauge,
-  Bell, Award, Layers, Brain, Lightbulb, Mic, ScanBarcode
+  Bell, Award, Layers, Brain, Lightbulb, Mic, ScanBarcode, ThumbsUp, ThumbsDown
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis,
@@ -695,14 +695,70 @@ function recordPortionCorrection(foodName, { aiPortion, userPortion, aiCalories,
     localStorage.setItem("portion-memory", JSON.stringify(all));
   } catch { /* storage full/unavailable — skip silently */ }
 }
-// Turns remembered corrections into a short prompt note, only once the same
-// food has been corrected more than once (so a single one-off edit doesn't
-// overfit the next estimate).
+// Lightweight "does this look right?" signal — much lower friction than editing
+// full numbers, so it's used far more often and gives the learning system a
+// steady stream of confirm/deny data points instead of relying only on the
+// rarer full manual correction.
+function recordQuickFeedback(foodName, { aiPortion, aiCalories }, isAccurate) {
+  const key = normalizeFoodKey(foodName);
+  if (!key) return;
+  try {
+    const all = JSON.parse(localStorage.getItem("portion-memory") || "{}");
+    const existing = all[key] || { foodName, corrections: [] };
+    existing.foodName = foodName;
+    // A thumbs-up is stored as a "correction" toward the AI's own number (i.e. a
+    // confirmation), which naturally pulls the weighted average back toward
+    // "keep doing this" instead of only ever reacting to edits.
+    existing.corrections = [{
+      aiPortion, userPortion: isAccurate ? aiPortion : "", aiCalories, userCalories: isAccurate ? aiCalories : aiCalories,
+      timestamp: Date.now(), confirmed: isAccurate,
+    }, ...existing.corrections].slice(0, 5);
+    all[key] = existing;
+    localStorage.setItem("portion-memory", JSON.stringify(all));
+  } catch { /* storage full/unavailable — skip silently */ }
+}
+// Guesses whether a user's typed portion is weight/volume-based ("180g",
+// "1.5 cups") or count-based ("2 rotis", "3 pieces"), so repeated corrections
+// can teach which unit style this user actually favors for a given food.
+function detectPortionUnitStyle(portionText) {
+  const s = (portionText || "").trim().toLowerCase();
+  if (!s) return null;
+  if (/\d+(\.\d+)?\s*(g|gram|grams|kg|ml|l|litre|liter)\b/.test(s)) return "weight/volume (e.g. grams/ml)";
+  if (/\d+(\.\d+)?\s*(piece|pieces|slice|slices|roti|rotis|chapati|chapatis|cup|cups|katori|katoris|bowl|bowls|plate|plates|spoon|spoons|tbsp|tsp)\b/.test(s)) return "count-based (e.g. pieces/cups/bowls)";
+  return null;
+}
+// Turns remembered corrections into a short prompt note. Averages the last few
+// corrections with more weight on recent ones (instead of just reacting to the
+// single latest edit, which could be an outlier), and also surfaces which
+// portion-unit style this user actually favors for the food.
 function buildPortionMemoryNote(foodName) {
   const mem = getPortionMemory(foodName);
   if (!mem || mem.corrections.length < 2) return "";
+  const weights = [1, 0.7, 0.5, 0.35, 0.25];
+  let weightedRatioSum = 0, weightTotal = 0;
+  const unitCounts = {};
+  mem.corrections.forEach((c, i) => {
+    const w = weights[i] ?? 0.15;
+    if (c.aiCalories > 0 && c.userCalories > 0) {
+      weightedRatioSum += (c.userCalories / c.aiCalories) * w;
+      weightTotal += w;
+    }
+    const unit = detectPortionUnitStyle(c.userPortion);
+    if (unit) unitCounts[unit] = (unitCounts[unit] || 0) + w;
+  });
+  const avgRatio = weightTotal > 0 ? weightedRatioSum / weightTotal : 1;
   const latest = mem.corrections[0];
-  return `\nNote: for "${mem.foodName}", this user has previously corrected the AI's estimate toward ${latest.userPortion || `~${Math.round(latest.userCalories)} kcal`} (from an initial estimate of ${latest.aiPortion || `~${Math.round(latest.aiCalories)} kcal`}) across ${mem.corrections.length} past logs. Lean toward the user's typical portion size for this food unless the current photo/description clearly indicates otherwise.`;
+  const confirmCount = mem.corrections.filter((c) => c.confirmed === true).length;
+  const flagCount = mem.corrections.filter((c) => c.confirmed === false).length;
+  const preferredUnit = Object.entries(unitCounts).sort((a, b) => b[1] - a[1])[0];
+
+  let note = `\nNote: for "${mem.foodName}", this user's past ${mem.corrections.length} logs (recency-weighted) trend toward about ${Math.round(avgRatio * 100)}% of the AI's initial calorie estimate`;
+  if (latest.userPortion) note += `, most recently correcting toward "${latest.userPortion}" (from an initial estimate of ${latest.aiPortion || `~${Math.round(latest.aiCalories)} kcal`})`;
+  note += `. Lean toward this user's typical portion size for this food unless the current photo/description clearly indicates otherwise — but weigh it as a trend across recent logs, not a single fixed override.`;
+  if (preferredUnit) note += ` This user typically reports this food's portion as ${preferredUnit[0]} — phrase "estimated_portion" in that style when reasonable.`;
+  if (confirmCount) note += ` They've also confirmed the AI's estimate as accurate ${confirmCount} time(s) without changes.`;
+  if (flagCount) note += ` They've flagged the AI's estimate as inaccurate ${flagCount} time(s) without giving a specific correction — treat this food's estimate with extra caution and lean conservative.`;
+  return note;
 }
 
 // ---------- Image compression ----------
@@ -738,23 +794,28 @@ function compressImageFile(file, { maxDimension = 1280, quality = 0.82 } = {}) {
   });
 }
 
-function buildMealPrompt({ mode, description, goals, todayTotals, todayLogs, portionMemoryNote }) {
+function buildMealPrompt({ mode, description, goals, todayTotals, todayLogs, portionMemoryNote, photoCount = 1 }) {
   const g = goals, t = todayTotals;
   const mealsText = (todayLogs && todayLogs.length)
     ? todayLogs.map((l) => `- ${l.food_name || "meal"} (${l.estimated_portion || "portion unspecified"}): ${Math.round(num(l.calories))} kcal, ${Math.round(num(l.protein_g))}g protein, ${Math.round(num(l.carbs_g))}g carbs, ${Math.round(num(l.fat_g))}g fat`).join("\n")
     : "No meals logged yet today.";
+  const dietaryProfileLine = (g.dietType || g.cuisine)
+    ? `\nUser's dietary profile: ${g.dietType || "not specified"}${g.cuisine ? `, typically eats ${g.cuisine} food` : ""}. Use this to narrow down ambiguous or unclear items (e.g. don't guess a meat-based dish for a vegetarian user's plate) and to recognize regional dishes correctly — but still trust what's actually visible/described over the profile if they conflict.`
+    : "";
   return `You are the nutrition estimation and portion-coaching engine inside a meal-logging app. Estimate the nutritional content of the meal ${mode === "photo" ? "shown in the photo" : "described by the user"}, then advise on portion size.
 
-User's daily goals: ${g.calories} kcal, ${g.protein}g protein, ${g.carbs}g carbs, ${g.fat}g fat.
+User's daily goals: ${g.calories} kcal, ${g.protein}g protein, ${g.carbs}g carbs, ${g.fat}g fat.${dietaryProfileLine}
 Already logged today before this meal (totals): ${t.calories} kcal, ${t.protein}g protein, ${t.carbs}g carbs, ${t.fat}g fat.
 Individual meals logged today so far:
 ${mealsText}
 ${mode === "text" ? `Meal description: "${description}"` : ""}${portionMemoryNote || ""}
 
 IMPORTANT — decompose before totaling: first identify every visually or verbally distinct food item in this meal (e.g. "roti", "dal", "mixed vegetable sabzi" are three separate items even if served on one plate — do not lump them into one blended guess). Estimate each item's own portion and nutrition independently, the way you would if it were logged on its own, THEN sum those per-item numbers to produce the meal-level totals below. This item-by-item approach is consistently more accurate than a single whole-plate guess, so do not skip it even for a simple-looking meal — a single food is just a one-item breakdown.
+${mode === "photo" ? (photoCount >= 2 ? `\nTwo photos of this meal were provided (different angles). Cross-reference them to judge portion depth/height with real confidence — use whichever shows height best (e.g. a side/angled shot) to correct what a top-down shot alone can't show (a thin layer vs. a mounded portion can look identical from directly above). Reflect that added confidence in "confidence" and "estimate_basis".` : `\nSingle-photo depth caveat: you're working from one photo at one angle, which can hide height/mounding (a thin layer of rice and a mounded portion can look identical from directly above). A second angle is optional and was not provided here, so do not ask for one — instead, actively reason about depth cues that ARE available in a single image: shadows at the food's edges, how much the food rises above the rim of its bowl/plate, whether the container looks fuller than a flat layer would allow, and typical serving conventions for that dish (e.g. rice and dal are rarely served perfectly flat). If the angle genuinely doesn't let you judge height with any confidence, say so plainly in "estimate_basis" and reflect that uncertainty in "confidence" rather than silently guessing flat.`) : ""}
 
 Respond with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:
 {
+  "reasoning": string,
   "items": [
     {"food_name": string, "estimated_portion": string, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}
   ],
@@ -774,6 +835,7 @@ Respond with ONLY valid JSON, no markdown fences, no commentary, in exactly this
   "portion_change_percent": number,
   "portion_guidance": string
 }
+"reasoning" MUST be written first, before you commit to any numbers, and the numbers that follow must be consistent with it. Use it to actually work through portion size like a person eyeballing the plate would — e.g. "the bowl looks about 12cm across and the rice fills roughly 60% of it at a modest mound, so that's closer to 150g than 100g or 200g" — reasoning in relative, comparative terms (fraction of plate/bowl covered, height relative to the rim, size vs. common reference objects) before turning that into a gram/count estimate. This field is for your own reasoning, not shown verbatim to the user, so think it through properly rather than writing a token justification.
 "items" must list each distinct food item separately (one entry even for a single-food meal) with its own calories/macros. The top-level "food_name"/"estimated_portion" should be a short combined label for the whole meal (e.g. "Roti, dal, and mixed veg"), and the top-level calories/protein_g/carbs_g/fat_g MUST equal the sum of the corresponding values across all "items" — do not report a top-level total that doesn't match summing the items. Give 3 to 6 notable micronutrients. Weigh both the remaining daily targets AND the composition of meals already logged today (e.g. flag it if today's meals are already carb-heavy or protein-light) when deciding portion_verdict. portion_change_percent is your best-guess recommended change to THIS portion, as a signed integer percent (e.g. -25 to shrink by a quarter, 0 to keep as-is, 15 to grow it) — it must be consistent with portion_verdict. Keep portion_guidance to one or two direct sentences, plain and specific, referencing what's driving the recommendation. "estimate_basis" is one short plain sentence explaining what the confidence level is actually based on (e.g. visual portion size guesswork, ambiguous preparation method/oil content, a precisely-specified weight in the description) — this is shown to the user under "Why this estimate?" so it must be concrete and specific to this meal, not generic.`;
 }
 
@@ -1563,7 +1625,7 @@ const handleGoogleSignIn = async () => {
   const [chartsPeriod, setChartsPeriod] = useState("week");
 
   const [profile, setProfile] = useState({ name: "" });
-  const [goals, setGoals] = useState({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0 });
+  const [goals, setGoals] = useState({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, dietType: "", cuisine: "" });
   const [logs, setLogs] = useState([]);
   const [weights, setWeights] = useState([]);
   const [exerciseLogs, setExerciseLogs] = useState([]);
@@ -1589,7 +1651,7 @@ const handleGoogleSignIn = async () => {
       loadKey("weekly-review", null),
       loadKey("monthly-review", null),
     ]);
-    setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setWaterLogs(wa); setSplits(sp); setDailyCoach(dc); setWeeklyReview(wr); setMonthlyReview(mr); setReady(true);
+    setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, dietType: "", cuisine: "", ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setWaterLogs(wa); setSplits(sp); setDailyCoach(dc); setWeeklyReview(wr); setMonthlyReview(mr); setReady(true);
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
@@ -2863,6 +2925,7 @@ const EMPTY_MEAL = { food_name: "", estimated_portion: "", calories: 0, protein_
 function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorites, recentMeals, onToggleFavorite, editingEntry }) {
   const [mode, setMode] = useState(initialMode === "manual" ? "text" : initialMode);
   const [imagePreview, setImagePreview] = useState(null);
+  const [imagePreview2, setImagePreview2] = useState(null); // optional second angle — never required
   const [description, setDescription] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [advising, setAdvising] = useState(false);
@@ -2873,6 +2936,8 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   });
   const [photoInputId] = useState(() => "meal-photo-" + uid());
   const [galleryInputId] = useState(() => "meal-gallery-" + uid());
+  const [photoInputId2] = useState(() => "meal-photo2-" + uid());
+  const [galleryInputId2] = useState(() => "meal-gallery2-" + uid());
   const [compressing, setCompressing] = useState(false);
   // A tiny (thumbnail-sized) copy of the photo, saved onto the log entry itself
   // so meal cards can show a small preview — kept separate from imagePreview
@@ -2952,21 +3017,22 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     setAiEstimate(null); // exact label data — not an AI guess, so correction-learning doesn't apply here
   }
 
-  async function handleImagePick(e) {
+  async function handleImagePick(e, slot = 1) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
     setError(null); setPending(null); setCompressing(true);
     try {
       const { b64, mediaType } = await compressImageFile(file);
-      setImagePreview({ b64, mediaType });
+      if (slot === 2) setImagePreview2({ b64, mediaType }); else setImagePreview({ b64, mediaType });
     } catch {
       // Compression failed (unsupported format, canvas error, etc.) — fall back
       // to sending the original file uncompressed rather than blocking the log.
       const b64 = await fileToBase64(file);
-      setImagePreview({ b64, mediaType: file.type || "image/jpeg" });
+      if (slot === 2) setImagePreview2({ b64, mediaType: file.type || "image/jpeg" }); else setImagePreview({ b64, mediaType: file.type || "image/jpeg" });
     } finally {
       setCompressing(false);
     }
+    if (slot === 2) return; // only the primary photo gets a card thumbnail
     // Best-effort tiny thumbnail for the meal card — failure here shouldn't
     // block logging, so it's just skipped if it doesn't work out.
     try {
@@ -2984,9 +3050,11 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     try {
       const foodGuess = mode === "text" ? descriptionToUse : "";
       const portionMemoryNote = buildPortionMemoryNote(foodGuess);
-      const promptText = buildMealPrompt({ mode, description: descriptionToUse, goals, todayTotals, todayLogs, portionMemoryNote });
+      const photoCount = mode === "photo" ? (imagePreview2 ? 2 : 1) : 0;
+      const promptText = buildMealPrompt({ mode, description: descriptionToUse, goals, todayTotals, todayLogs, portionMemoryNote, photoCount });
+      const photoBlocks = [imagePreview, imagePreview2].filter(Boolean).map((img) => ({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.b64 } }));
       const blocks = mode === "photo"
-        ? [{ type: "image", source: { type: "base64", media_type: imagePreview.mediaType, data: imagePreview.b64 } }, { type: "text", text: promptText }]
+        ? [...photoBlocks, { type: "text", text: promptText }]
         : [{ type: "text", text: promptText }];
       const raw = await callGemini(blocks);
       const parsed = parseJSON(raw);
@@ -3011,6 +3079,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       });
       setLastCalculatedPortion(estimatedPortion);
       setAiEstimate({ portion: estimatedPortion, calories: num(parsed.calories) });
+      setQuickFeedbackGiven(null);
     } catch (e) {
       setError((e && e.message ? e.message : "Couldn't analyze that meal") + " — enter it manually below.");
       setPending({ ...EMPTY_MEAL, food_name: mode === "text" ? descriptionToUse : "Logged meal" });
@@ -3050,7 +3119,15 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     };
     recognition.onerror = (event) => {
       setListening(false);
-      if (event.error !== "no-speech" && event.error !== "aborted") setError("Couldn't hear that — try again or type instead.");
+      if (event.error === "no-speech" || event.error === "aborted") return;
+      const messages = {
+        "not-allowed": "Microphone permission is blocked for this site — tap the lock/info icon next to the address bar, allow microphone access, then try again.",
+        "permission-denied": "Microphone permission is blocked for this site — tap the lock/info icon next to the address bar, allow microphone access, then try again.",
+        "audio-capture": "No microphone found on this device — try again or type instead.",
+        "network": "Voice recognition needs an internet connection to work — try again once you're online, or type instead.",
+        "service-not-allowed": "Voice recognition is blocked by the browser right now — try again or type instead.",
+      };
+      setError(messages[event.error] || "Couldn't hear that — try again or type instead.");
     };
     recognition.onend = () => {
       setListening(false);
@@ -3088,6 +3165,14 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   const [aiEstimate, setAiEstimate] = useState(null);
   const [showWhyEstimate, setShowWhyEstimate] = useState(false);
   const [showItemBreakdown, setShowItemBreakdown] = useState(false);
+  const [quickFeedbackGiven, setQuickFeedbackGiven] = useState(null); // null | "up" | "down"
+
+  function giveQuickFeedback(isAccurate) {
+    if (!aiEstimate || !pending || !pending.food_name) return;
+    recordQuickFeedback(pending.food_name, { aiPortion: aiEstimate.portion, aiCalories: aiEstimate.calories }, isAccurate);
+    setQuickFeedbackGiven(isAccurate ? "up" : "down");
+    haptic("light");
+  }
 
   function updateField(key, value) { setPending((p) => ({ ...p, [key]: key === "food_name" || key === "estimated_portion" ? value : num(value) })); }
 
@@ -3120,6 +3205,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       }));
       setLastCalculatedPortion(parsed.estimated_portion || pending.estimated_portion);
       setAiEstimate({ portion: parsed.estimated_portion || pending.estimated_portion, calories: num(parsed.calories) });
+      setQuickFeedbackGiven(null);
     } catch (e) {
       setError(e && e.message ? e.message : "Couldn't recalculate nutrition for that portion.");
     } finally { setRecalculating(false); }
@@ -3199,14 +3285,38 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
             <div className="mb-3">
               <input id={photoInputId} type="file" accept="image/*" capture="environment" onChange={handleImagePick} className="hidden" />
               <input id={galleryInputId} type="file" accept="image/*" onChange={handleImagePick} className="hidden" />
+              <input id={photoInputId2} type="file" accept="image/*" capture="environment" onChange={(e) => handleImagePick(e, 2)} className="hidden" />
+              <input id={galleryInputId2} type="file" accept="image/*" onChange={(e) => handleImagePick(e, 2)} className="hidden" />
               {compressing ? (
                 <div className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-2xl" style={{ border: `2px dashed ${C.track}`, background: C.card }}>
                   <Loader2 size={22} color={C.orange} className="animate-spin" /><span className="ft-body" style={{ fontSize: 13, color: C.inkSoft }}>Optimizing photo…</span>
                 </div>
               ) : imagePreview ? (
-                <div className="relative">
-                  <img src={`data:${imagePreview.mediaType};base64,${imagePreview.b64}`} alt="Meal preview" style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 16 }} />
-                  <button onClick={() => setImagePreview(null)} className="absolute top-2 right-2 p-1.5 rounded-full" style={{ background: "rgba(21,23,27,0.7)" }}><X size={14} color="#fff" /></button>
+                <div>
+                  <div className="relative">
+                    <img src={`data:${imagePreview.mediaType};base64,${imagePreview.b64}`} alt="Meal preview" style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 16 }} />
+                    <button onClick={() => { setImagePreview(null); setImagePreview2(null); }} className="absolute top-2 right-2 p-1.5 rounded-full" style={{ background: "rgba(21,23,27,0.7)" }}><X size={14} color="#fff" /></button>
+                  </div>
+                  {/* A second angle is entirely optional — one photo already works fine,
+                      this just gives the AI a depth/height cue when you want extra accuracy. */}
+                  {imagePreview2 ? (
+                    <div className="relative mt-2">
+                      <img src={`data:${imagePreview2.mediaType};base64,${imagePreview2.b64}`} alt="Second angle preview" style={{ width: "100%", height: 100, objectFit: "cover", borderRadius: 16 }} />
+                      <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded-full" style={{ background: "rgba(21,23,27,0.6)" }}>
+                        <span className="ft-body" style={{ fontSize: 10.5, color: "#fff", fontWeight: 600 }}>2nd angle</span>
+                      </div>
+                      <button onClick={() => setImagePreview2(null)} className="absolute top-2 right-2 p-1.5 rounded-full" style={{ background: "rgba(21,23,27,0.7)" }}><X size={14} color="#fff" /></button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2 mt-2">
+                      <label htmlFor={photoInputId2} className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl cursor-pointer" style={{ border: `1.5px dashed ${C.track}`, background: "transparent" }}>
+                        <Camera size={14} color={C.inkSoft} /><span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>Add another angle (optional)</span>
+                      </label>
+                      <label htmlFor={galleryInputId2} className="flex items-center justify-center px-3 py-2.5 rounded-xl cursor-pointer" style={{ border: `1.5px dashed ${C.track}`, background: "transparent" }}>
+                        <Layers size={14} color={C.inkSoft} />
+                      </label>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="flex gap-2.5">
@@ -3314,6 +3424,25 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
                   <button onClick={() => setShowItemBreakdown((s) => !s)} className="ft-body flex items-center gap-1" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>
                     Item breakdown ({pending.items.length}) <ChevronDown size={11} style={{ transform: showItemBreakdown ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
                   </button>
+                )}
+                {aiEstimate && (
+                  <div className="flex items-center gap-1.5 ml-auto">
+                    {quickFeedbackGiven ? (
+                      <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft, fontWeight: 600 }}>
+                        {quickFeedbackGiven === "up" ? "Thanks — glad it's close" : "Thanks — we'll be more careful with this one"}
+                      </span>
+                    ) : (
+                      <>
+                        <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>Look right?</span>
+                        <button onClick={() => giveQuickFeedback(true)} className="p-1 rounded-full" style={{ background: C.card }} title="Looks about right">
+                          <ThumbsUp size={13} color={C.inkSoft} />
+                        </button>
+                        <button onClick={() => giveQuickFeedback(false)} className="p-1 rounded-full" style={{ background: C.card }} title="Doesn't look right">
+                          <ThumbsDown size={13} color={C.inkSoft} />
+                        </button>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
               {showWhyEstimate && pending.estimate_basis && (
@@ -3666,6 +3795,8 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
               { label: "Fiber", value: `${goals.fiber}g` },
               { label: "Water", value: `${goals.water}ml` },
               ...(goals.targetWeight > 0 ? [{ label: "Goal weight", value: `${goals.targetWeight}kg` }] : []),
+              ...(goals.dietType ? [{ label: "Diet", value: goals.dietType }] : []),
+              ...(goals.cuisine ? [{ label: "Cuisine", value: goals.cuisine }] : []),
             ].map((g) => (
               <div key={g.label}>
                 <div className="ft-body" style={{ fontSize: 12, color: C.inkSoft }}>{g.label}</div>
@@ -3677,6 +3808,24 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
           <div className="mt-3">
             {field("calories", "Calories", "kcal")}{field("protein", "Protein", "g")}{field("carbs", "Carbohydrates", "g")}{field("fat", "Fat", "g")}{field("fiber", "Fiber", "g")}{field("water", "Water", "ml")}
             {field("targetWeight", "Goal weight", "kg (0 = off)")}
+            <div className="mb-3">
+              <div className="mb-1"><span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>Diet type</span></div>
+              <div className="flex flex-wrap gap-1.5">
+                {["", "Vegetarian", "Non-vegetarian", "Eggetarian", "Vegan"].map((d) => (
+                  <button key={d || "unset"} onClick={() => { setLocal((p) => ({ ...p, dietType: d })); setSaved(false); }}
+                    className="px-3 py-1.5 rounded-full ft-body" style={{ fontSize: 12, fontWeight: 600, background: local.dietType === d ? C.ink : C.card, color: local.dietType === d ? C.onInk : C.inkSoft, border: `1px solid ${C.track}` }}>
+                    {d || "Not set"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mb-3">
+              <div className="mb-1"><span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>Usual cuisine</span></div>
+              <input type="text" value={local.cuisine || ""} placeholder="e.g. North Indian, South Indian, Mediterranean"
+                onChange={(e) => { setLocal((p) => ({ ...p, cuisine: e.target.value })); setSaved(false); }}
+                className="w-full p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 14, outline: "none" }} />
+              <div className="ft-body mt-1" style={{ fontSize: 11, color: C.inkSoft }}>Helps the AI recognize dishes and guess portions more accurately.</div>
+            </div>
             <button onClick={async () => { await onSaveGoals(local); haptic("success"); setSaved(true); setGoalsEditing(false); }} className="w-full flex items-center justify-center gap-2 py-3 rounded-full ft-body"
               style={{ background: C.orange, color: "#fff", fontSize: 14, fontWeight: 600 }}>Save goals</button>
           </div>
