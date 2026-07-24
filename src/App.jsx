@@ -2872,6 +2872,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     return initialMode === "manual" ? { ...EMPTY_MEAL } : null;
   });
   const [photoInputId] = useState(() => "meal-photo-" + uid());
+  const [galleryInputId] = useState(() => "meal-gallery-" + uid());
   const [compressing, setCompressing] = useState(false);
   // A tiny (thumbnail-sized) copy of the photo, saved onto the log entry itself
   // so meal cards can show a small preview — kept separate from imagePreview
@@ -2904,7 +2905,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   async function scanBarcodeNative() {
     setBarcodeError(null);
     if (!window.Capacitor?.isNativePlatform?.()) {
-      setBarcodeError("Camera scanning isn't available in this preview. You can still type the barcode number in below.");
+      setBarcodeError("Camera barcode scanning only works in the installed app, not in a mobile browser — that's why no permission prompt appears in your phone's app settings. You can still type the barcode number in below.");
       return;
     }
     try {
@@ -3196,7 +3197,8 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
           </div>
           {mode === "photo" ? (
             <div className="mb-3">
-              <input id={photoInputId} type="file" accept="image/*" onChange={handleImagePick} className="hidden" />
+              <input id={photoInputId} type="file" accept="image/*" capture="environment" onChange={handleImagePick} className="hidden" />
+              <input id={galleryInputId} type="file" accept="image/*" onChange={handleImagePick} className="hidden" />
               {compressing ? (
                 <div className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-2xl" style={{ border: `2px dashed ${C.track}`, background: C.card }}>
                   <Loader2 size={22} color={C.orange} className="animate-spin" /><span className="ft-body" style={{ fontSize: 13, color: C.inkSoft }}>Optimizing photo…</span>
@@ -3207,9 +3209,14 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
                   <button onClick={() => setImagePreview(null)} className="absolute top-2 right-2 p-1.5 rounded-full" style={{ background: "rgba(21,23,27,0.7)" }}><X size={14} color="#fff" /></button>
                 </div>
               ) : (
-                <label htmlFor={photoInputId} className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-2xl cursor-pointer" style={{ border: `2px dashed ${C.track}`, background: C.card }}>
-                  <Camera size={22} color={C.orange} /><span className="ft-body" style={{ fontSize: 13, color: C.inkSoft }}>Tap to add a photo</span>
-                </label>
+                <div className="flex gap-2.5">
+                  <label htmlFor={photoInputId} className="flex-1 flex flex-col items-center justify-center gap-2 py-8 rounded-2xl cursor-pointer" style={{ border: `2px dashed ${C.track}`, background: C.card }}>
+                    <Camera size={22} color={C.orange} /><span className="ft-body" style={{ fontSize: 13, color: C.inkSoft }}>Take photo</span>
+                  </label>
+                  <label htmlFor={galleryInputId} className="flex-1 flex flex-col items-center justify-center gap-2 py-8 rounded-2xl cursor-pointer" style={{ border: `2px dashed ${C.track}`, background: C.card }}>
+                    <Layers size={22} color={C.orange} /><span className="ft-body" style={{ fontSize: 13, color: C.inkSoft }}>Choose from gallery</span>
+                  </label>
+                </div>
               )}
             </div>
           ) : mode === "text" ? (
