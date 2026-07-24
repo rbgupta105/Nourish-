@@ -1713,12 +1713,12 @@ const handleGoogleSignIn = async () => {
   const weightSeries = useMemo(() => [...weights].sort((a, b) => a.timestamp - b.timestamp).map((w) => ({ date: fmtDate(w.date), weight: w.weight })), [weights]);
   const weightPace = useMemo(() => computeWeightPace(weights), [weights]);
   const weightProjection = useMemo(() => weightPace ? projectWeeksToGoal(weightPace.currentWeight, goals.targetWeight, weightPace.paceKgPerWeek) : null, [weightPace, goals.targetWeight]);
-  const insights = useMemo(() => generateInsights(logs, exerciseLogs, goals), [logs, exerciseLogs, goals]);
+  const insights = useMemo(() => generateInsights(logs, exerciseLogs, goals), [logs, exerciseLogs, goals, darkMode]);
   const weeklyConsistency = useMemo(() => computeWeeklyConsistency(logs, goals, 7), [logs, goals]);
   const periodSummary = useMemo(() => computePeriodSummary(logs, chartsPeriod === "week" ? 7 : 30), [logs, chartsPeriod]);
   const todayWater = useMemo(() => waterLogs.filter((w) => w.date === todayStr()).reduce((s, w) => s + num(w.ml), 0), [waterLogs]);
   const nutritionScore = useMemo(() => computeNutritionScore({ todayTotals, todayLogs, goals, waterMl: todayWater }), [todayTotals, todayLogs, goals, todayWater]);
-  const microSummary = useMemo(() => computeMicronutrientSummary(todayLogs, goals), [todayLogs, goals]);
+  const microSummary = useMemo(() => computeMicronutrientSummary(todayLogs, goals), [todayLogs, goals, darkMode]);
   const weeklyAchievement = useMemo(() => computeWeeklyAchievement(logs, goals), [logs, goals]);
   const mealDates = useMemo(() => new Set(logs.map((l) => l.date)), [logs]);
   const exerciseDates = useMemo(() => new Set(exerciseLogs.map((e) => e.date)), [exerciseLogs]);
@@ -1807,7 +1807,7 @@ const handleGoogleSignIn = async () => {
   }, []);
   const smartNotifications = useMemo(
     () => computeSmartNotifications({ todayTotals, todayLogs, goals, todayWater, now: nowTick }).filter((n) => !dismissedNotifications.includes(n.id)),
-    [todayTotals, todayLogs, goals, todayWater, nowTick, dismissedNotifications]
+    [todayTotals, todayLogs, goals, todayWater, nowTick, dismissedNotifications, darkMode]
   );
 
   // ---------- AI Daily Coach ----------
