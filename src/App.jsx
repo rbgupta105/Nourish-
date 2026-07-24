@@ -3116,6 +3116,13 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     }
     setError(null);
     try {
+      const { available } = await SpeechRecognition.available();
+      if (!available) {
+        setError("Voice recognition isn't available on this device (no speech-recognition service installed). Try typing instead.");
+        return;
+      }
+    } catch { /* if the check itself fails, fall through and let start() surface the real error */ }
+    try {
       const { speechRecognition } = await SpeechRecognition.checkPermissions();
       let granted = speechRecognition === "granted";
       if (!granted) {
@@ -3130,25 +3137,39 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       setError("Couldn't access the microphone. Try again or type instead.");
       return;
     }
+    // Pulls the first usable transcript out of whatever shape the plugin hands
+    // back — different Android versions/OEM speech services have been known to
+    // return either {matches:[...]}, a bare array, or a single {value} object.
+    const extractMatch = (data) => {
+      if (!data) return "";
+      if (Array.isArray(data)) return data[0] || "";
+      if (Array.isArray(data.matches)) return data.matches[0] || "";
+      if (typeof data.value === "string") return data.value;
+      return "";
+    };
     let liveTranscript = "";
     const listener = await SpeechRecognition.addListener("partialResults", (data) => {
-      const match = data && data.matches && data.matches[0];
+      const match = extractMatch(data);
       if (match) { liveTranscript = match; setDescription(match); }
     });
     setListening(true);
     try {
+      // popup:true shows Android's native "Speak now" listening UI — headless
+      // (popup:false) mode has been unreliable on several OEM keyboards/speech
+      // services, silently returning no matches with no error at all.
       const result = await SpeechRecognition.start({
         language: navigator.language || "en-US",
         maxResults: 1,
         prompt: "Speak your meal",
         partialResults: true,
-        popup: false,
+        popup: true,
       });
-      const finalMatch = (result && result.matches && result.matches[0]) || liveTranscript;
+      const finalMatch = extractMatch(result) || liveTranscript;
       setListening(false);
       listener.remove();
       const transcript = (finalMatch || "").trim();
       if (transcript.length >= 2) { setDescription(transcript); analyze(transcript); }
+      else setError("Didn't catch any words — try again, speak right after tapping, or type instead.");
     } catch (e) {
       setListening(false);
       listener.remove();
