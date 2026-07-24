@@ -8,6 +8,7 @@ import {
   onAuthStateChanged,
 } from "firebase/auth";
 import { FirebaseAuthentication } from "@capacitor-firebase/authentication";
+import { BarcodeScanner } from "@capacitor-mlkit/barcode-scanning";
 import { auth, googleProvider, db } from "./firebase";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
@@ -16,7 +17,7 @@ import {
   Trash2, Loader2, TrendingUp, TrendingDown, Minus, X, Check,
   Flame, Trophy, Dumbbell, Wheat, Droplet, AlertCircle, Home, Activity, Sparkles,
   Star, Pencil, Copy, Droplets, ChevronLeft, ChevronRight, ChevronDown, CalendarDays, Gauge,
-  Bell, Award, Layers, Brain, Lightbulb, Mic
+  Bell, Award, Layers, Brain, Lightbulb, Mic, ScanBarcode
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis,
@@ -553,6 +554,49 @@ function fileToBase64(file) {
   });
 }
 
+// ---------- Barcode / packaged-food lookup (OpenFoodFacts) ----------
+// Free, keyless public database — used as an alternative to AI photo/text
+// estimation for packaged foods. A barcode match gives exact label nutrition
+// instead of a visual guess, so it's treated as "high confidence" by design.
+// Completely separate from the Gemini meal-analysis path above.
+function parseServingGrams(servingSize) {
+  if (!servingSize) return null;
+  const m = String(servingSize).match(/([\d.]+)\s*g\b/i);
+  return m ? Number(m[1]) : null;
+}
+async function lookupBarcodeProduct(code) {
+  const trimmed = (code || "").trim();
+  if (!trimmed) throw new Error("Enter or scan a barcode number first.");
+  let data;
+  try {
+    const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(trimmed)}.json`);
+    data = await res.json();
+  } catch {
+    throw new Error("Couldn't reach the food database — check your connection and try again.");
+  }
+  if (!data || data.status !== 1 || !data.product) {
+    throw new Error("No product found for that barcode. You can log this meal with Photo or Describe instead.");
+  }
+  const p = data.product;
+  const n = p.nutriments || {};
+  // OpenFoodFacts reports per-100g (and sometimes per-serving) — standardizing
+  // on per-100g here so any quantity the user enters scales consistently.
+  return {
+    name: p.product_name || p.generic_name || trimmed,
+    brand: p.brands || "",
+    servingGrams: parseServingGrams(p.serving_size),
+    per100g: {
+      calories: num(n["energy-kcal_100g"]),
+      protein_g: num(n.proteins_100g),
+      carbs_g: num(n.carbohydrates_100g),
+      fat_g: num(n.fat_100g),
+      fiber_g: num(n.fiber_100g),
+      sugar_g: num(n.sugars_100g),
+      sodium_mg: num(n.sodium_100g) * 1000, // OFF reports sodium in g/100g
+    },
+  };
+}
+
 // ---------- Haptics ----------
 // Best-effort tactile feedback for save/delete actions. No-ops silently on
 // devices/browsers without the Vibration API (e.g. iOS Safari, desktop).
@@ -707,8 +751,13 @@ Individual meals logged today so far:
 ${mealsText}
 ${mode === "text" ? `Meal description: "${description}"` : ""}${portionMemoryNote || ""}
 
+IMPORTANT — decompose before totaling: first identify every visually or verbally distinct food item in this meal (e.g. "roti", "dal", "mixed vegetable sabzi" are three separate items even if served on one plate — do not lump them into one blended guess). Estimate each item's own portion and nutrition independently, the way you would if it were logged on its own, THEN sum those per-item numbers to produce the meal-level totals below. This item-by-item approach is consistently more accurate than a single whole-plate guess, so do not skip it even for a simple-looking meal — a single food is just a one-item breakdown.
+
 Respond with ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:
 {
+  "items": [
+    {"food_name": string, "estimated_portion": string, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}
+  ],
   "food_name": string,
   "estimated_portion": string,
   "calories": number,
@@ -725,7 +774,7 @@ Respond with ONLY valid JSON, no markdown fences, no commentary, in exactly this
   "portion_change_percent": number,
   "portion_guidance": string
 }
-Give 3 to 6 notable micronutrients. Weigh both the remaining daily targets AND the composition of meals already logged today (e.g. flag it if today's meals are already carb-heavy or protein-light) when deciding portion_verdict. portion_change_percent is your best-guess recommended change to THIS portion, as a signed integer percent (e.g. -25 to shrink by a quarter, 0 to keep as-is, 15 to grow it) — it must be consistent with portion_verdict. Keep portion_guidance to one or two direct sentences, plain and specific, referencing what's driving the recommendation. "estimate_basis" is one short plain sentence explaining what the confidence level is actually based on (e.g. visual portion size guesswork, ambiguous preparation method/oil content, a precisely-specified weight in the description) — this is shown to the user under "Why this estimate?" so it must be concrete and specific to this meal, not generic.`;
+"items" must list each distinct food item separately (one entry even for a single-food meal) with its own calories/macros. The top-level "food_name"/"estimated_portion" should be a short combined label for the whole meal (e.g. "Roti, dal, and mixed veg"), and the top-level calories/protein_g/carbs_g/fat_g MUST equal the sum of the corresponding values across all "items" — do not report a top-level total that doesn't match summing the items. Give 3 to 6 notable micronutrients. Weigh both the remaining daily targets AND the composition of meals already logged today (e.g. flag it if today's meals are already carb-heavy or protein-light) when deciding portion_verdict. portion_change_percent is your best-guess recommended change to THIS portion, as a signed integer percent (e.g. -25 to shrink by a quarter, 0 to keep as-is, 15 to grow it) — it must be consistent with portion_verdict. Keep portion_guidance to one or two direct sentences, plain and specific, referencing what's driving the recommendation. "estimate_basis" is one short plain sentence explaining what the confidence level is actually based on (e.g. visual portion size guesswork, ambiguous preparation method/oil content, a precisely-specified weight in the description) — this is shown to the user under "Why this estimate?" so it must be concrete and specific to this meal, not generic.`;
 }
 
 function buildPortionAdvicePrompt({ pending, goals, todayTotals, todayLogs }) {
@@ -2809,7 +2858,7 @@ function AddLogSheet({ initialLogType, initialMode, goals, todayTotals, todayLog
   );
 }
 
-const EMPTY_MEAL = { food_name: "", estimated_portion: "", calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, sugar_g: 0, sodium_mg: 0, micronutrients: [], confidence: "manual", estimate_basis: "", portion_verdict: null, portion_change_percent: 0, portion_guidance: "" };
+const EMPTY_MEAL = { food_name: "", estimated_portion: "", calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, sugar_g: 0, sodium_mg: 0, micronutrients: [], confidence: "manual", estimate_basis: "", portion_verdict: null, portion_change_percent: 0, portion_guidance: "", items: [] };
 
 function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorites, recentMeals, onToggleFavorite, editingEntry }) {
   const [mode, setMode] = useState(initialMode === "manual" ? "text" : initialMode);
@@ -2828,6 +2877,79 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   // so meal cards can show a small preview — kept separate from imagePreview
   // (which stays large enough for the AI to actually analyze).
   const [photoThumb, setPhotoThumb] = useState(editingEntry && editingEntry.photo_thumb ? editingEntry.photo_thumb : null);
+
+  // ---------- Barcode / packaged-food scanning ----------
+  // A parallel path to AI photo/text analysis: matches a barcode to an exact
+  // label in OpenFoodFacts instead of asking Gemini to guess. Kept fully
+  // separate from analyze()/callGemini — no AI call happens on this path.
+  const [barcodeInput, setBarcodeInput] = useState("");
+  const [scanningBarcode, setScanningBarcode] = useState(false);
+  const [barcodeError, setBarcodeError] = useState(null);
+  const [scannedProduct, setScannedProduct] = useState(null); // { name, brand, servingGrams, per100g }
+  const [barcodeQuantity, setBarcodeQuantity] = useState("100");
+
+  async function runBarcodeLookup(code) {
+    setBarcodeError(null); setScanningBarcode(true); setScannedProduct(null);
+    try {
+      const product = await lookupBarcodeProduct(code);
+      setScannedProduct(product);
+      setBarcodeQuantity(String(product.servingGrams || 100));
+    } catch (e) {
+      setBarcodeError(e && e.message ? e.message : "Couldn't look up that barcode.");
+    } finally {
+      setScanningBarcode(false);
+    }
+  }
+
+  async function scanBarcodeNative() {
+    setBarcodeError(null);
+    if (!window.Capacitor?.isNativePlatform?.()) {
+      setBarcodeError("Camera scanning isn't available in this preview. You can still type the barcode number in below.");
+      return;
+    }
+    try {
+      const { camera } = await BarcodeScanner.requestPermissions();
+      if (camera !== "granted" && camera !== "limited") {
+        setBarcodeError("Camera permission is needed to scan a barcode. You can still type the number in below.");
+        return;
+      }
+      const { barcodes } = await BarcodeScanner.scan();
+      const value = barcodes && barcodes[0] && barcodes[0].rawValue;
+      if (!value) return; // user cancelled the scan
+      setBarcodeInput(value);
+      await runBarcodeLookup(value);
+    } catch (e) {
+      setBarcodeError(e && e.message ? e.message : "Barcode scan failed — try typing the number instead.");
+    }
+  }
+
+  // Turns the scanned product's per-100g label data + the quantity the user
+  // actually ate into a normal pending-meal object, so it flows through the
+  // exact same review/edit/save screen as an AI-analyzed meal.
+  function applyBarcodeQuantity() {
+    if (!scannedProduct) return;
+    const grams = num(barcodeQuantity);
+    if (grams <= 0) { setBarcodeError("Enter how many grams you're having."); return; }
+    const scale = grams / 100;
+    const p100 = scannedProduct.per100g;
+    setPending({
+      ...EMPTY_MEAL,
+      food_name: scannedProduct.brand ? `${scannedProduct.name} (${scannedProduct.brand})` : scannedProduct.name,
+      estimated_portion: `${grams}g`,
+      calories: Math.round(p100.calories * scale),
+      protein_g: Math.round(p100.protein_g * scale * 10) / 10,
+      carbs_g: Math.round(p100.carbs_g * scale * 10) / 10,
+      fat_g: Math.round(p100.fat_g * scale * 10) / 10,
+      fiber_g: Math.round(p100.fiber_g * scale * 10) / 10,
+      sugar_g: Math.round(p100.sugar_g * scale * 10) / 10,
+      sodium_mg: Math.round(p100.sodium_mg * scale),
+      confidence: "high",
+      estimate_basis: `Matched via barcode to a packaged-food label (OpenFoodFacts) scaled to ${grams}g — this is the manufacturer's declared nutrition, not an AI estimate.`,
+      items: [],
+    });
+    setLastCalculatedPortion(`${grams}g`);
+    setAiEstimate(null); // exact label data — not an AI guess, so correction-learning doesn't apply here
+  }
 
   async function handleImagePick(e) {
     const file = e.target.files && e.target.files[0];
@@ -2868,6 +2990,12 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       const raw = await callGemini(blocks);
       const parsed = parseJSON(raw);
       const estimatedPortion = parsed.estimated_portion || "";
+      const items = Array.isArray(parsed.items)
+        ? parsed.items.map((it) => ({
+            food_name: it.food_name || "Item", estimated_portion: it.estimated_portion || "",
+            calories: num(it.calories), protein_g: num(it.protein_g), carbs_g: num(it.carbs_g), fat_g: num(it.fat_g),
+          }))
+        : [];
       setPending({
         food_name: parsed.food_name || (mode === "text" ? descriptionToUse : "Logged meal"),
         estimated_portion: estimatedPortion,
@@ -2878,6 +3006,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
         estimate_basis: parsed.estimate_basis || "",
         portion_verdict: parsed.portion_verdict || "keep", portion_change_percent: num(parsed.portion_change_percent),
         portion_guidance: parsed.portion_guidance || "",
+        items,
       });
       setLastCalculatedPortion(estimatedPortion);
       setAiEstimate({ portion: estimatedPortion, calories: num(parsed.calories) });
@@ -2957,6 +3086,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   // whatever the user actually saves so repeated corrections can be learned from.
   const [aiEstimate, setAiEstimate] = useState(null);
   const [showWhyEstimate, setShowWhyEstimate] = useState(false);
+  const [showItemBreakdown, setShowItemBreakdown] = useState(false);
 
   function updateField(key, value) { setPending((p) => ({ ...p, [key]: key === "food_name" || key === "estimated_portion" ? value : num(value) })); }
 
@@ -2969,6 +3099,12 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       const promptText = buildMealPrompt({ mode: "text", description: description2, goals, todayTotals, todayLogs, portionMemoryNote });
       const raw = await callGemini([{ type: "text", text: promptText }]);
       const parsed = parseJSON(raw);
+      const items = Array.isArray(parsed.items)
+        ? parsed.items.map((it) => ({
+            food_name: it.food_name || "Item", estimated_portion: it.estimated_portion || "",
+            calories: num(it.calories), protein_g: num(it.protein_g), carbs_g: num(it.carbs_g), fat_g: num(it.fat_g),
+          }))
+        : [];
       setPending((p) => ({
         ...p,
         estimated_portion: parsed.estimated_portion || p.estimated_portion,
@@ -2979,6 +3115,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
         estimate_basis: parsed.estimate_basis || p.estimate_basis,
         portion_verdict: parsed.portion_verdict || "keep", portion_change_percent: num(parsed.portion_change_percent),
         portion_guidance: parsed.portion_guidance || "",
+        items: items.length ? items : p.items,
       }));
       setLastCalculatedPortion(parsed.estimated_portion || pending.estimated_portion);
       setAiEstimate({ portion: parsed.estimated_portion || pending.estimated_portion, calories: num(parsed.calories) });
@@ -3054,10 +3191,12 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
               style={{ background: mode === "photo" ? C.ink : C.card, color: mode === "photo" ? C.onInk : C.ink, fontSize: 13, fontWeight: 600 }}><Camera size={15} /> Photo</button>
             <button onClick={() => { setMode("text"); setError(null); }} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
               style={{ background: mode === "text" ? C.ink : C.card, color: mode === "text" ? C.onInk : C.ink, fontSize: 13, fontWeight: 600 }}><Type size={15} /> Describe</button>
+            <button onClick={() => { setMode("barcode"); setError(null); setBarcodeError(null); }} className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-full ft-body"
+              style={{ background: mode === "barcode" ? C.ink : C.card, color: mode === "barcode" ? C.onInk : C.ink, fontSize: 13, fontWeight: 600 }}><ScanBarcode size={15} /> Barcode</button>
           </div>
           {mode === "photo" ? (
             <div className="mb-3">
-              <input id={photoInputId} type="file" accept="image/*" capture="environment" onChange={handleImagePick} className="hidden" />
+              <input id={photoInputId} type="file" accept="image/*" onChange={handleImagePick} className="hidden" />
               {compressing ? (
                 <div className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-2xl" style={{ border: `2px dashed ${C.track}`, background: C.card }}>
                   <Loader2 size={22} color={C.orange} className="animate-spin" /><span className="ft-body" style={{ fontSize: 13, color: C.inkSoft }}>Optimizing photo…</span>
@@ -3073,7 +3212,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
                 </label>
               )}
             </div>
-          ) : (
+          ) : mode === "text" ? (
             <div className="relative mb-3">
               <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. 2 rotis, one bowl dal, 100g paneer"
                 className="w-full p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 14, minHeight: 90, resize: "none", outline: "none", paddingRight: 46 }} />
@@ -3085,12 +3224,60 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
               )}
               {listening && <div className="ft-body mt-1.5" style={{ fontSize: 12, color: C.pink }}>Listening… speak naturally, e.g. "2 rotis, one bowl dal, and 100 grams paneer"</div>}
             </div>
+          ) : (
+            <div className="mb-3">
+              <div className="ft-body mb-2.5" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4 }}>
+                Best for packaged/branded foods — matches the barcode to the manufacturer's label instead of guessing from a photo.
+              </div>
+              <button onClick={scanBarcodeNative} disabled={scanningBarcode} className="w-full flex items-center justify-center gap-2 py-3.5 mb-2.5 rounded-2xl ft-body"
+                style={{ border: `2px dashed ${C.track}`, background: C.card, color: C.ink, fontSize: 13.5, fontWeight: 600 }}>
+                <ScanBarcode size={18} color={C.orange} />{scanningBarcode ? "Looking up…" : "Scan with camera"}
+              </button>
+              <div className="flex gap-2 mb-2.5">
+                <input value={barcodeInput} onChange={(e) => setBarcodeInput(e.target.value)} inputMode="numeric" placeholder="Or type the barcode number"
+                  className="flex-1 p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 14, outline: "none" }} />
+                <button onClick={() => runBarcodeLookup(barcodeInput)} disabled={scanningBarcode || !barcodeInput.trim()} className="px-4 rounded-2xl ft-body flex items-center justify-center"
+                  style={{ background: C.ink, color: C.onInk, fontSize: 13, fontWeight: 600, opacity: scanningBarcode ? 0.7 : 1 }}>
+                  {scanningBarcode ? <Loader2 size={15} className="animate-spin" /> : "Look up"}
+                </button>
+              </div>
+              {barcodeError && (
+                <div className="flex items-start gap-2 p-2.5 mb-2.5 rounded-xl" style={{ background: C.pinkTint }}>
+                  <AlertCircle size={15} color={C.pink} style={{ flexShrink: 0, marginTop: 1 }} /><span className="ft-body" style={{ fontSize: 12, color: C.pink }}>{barcodeError}</span>
+                </div>
+              )}
+              {scannedProduct && (
+                <div className="p-3 rounded-2xl" style={{ background: C.card }}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <ConfidenceBadge level="high" />
+                    <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft }}>Matched via barcode</span>
+                  </div>
+                  <div className="ft-body mb-0.5" style={{ fontSize: 14.5, fontWeight: 700, color: C.ink }}>{scannedProduct.name}</div>
+                  {scannedProduct.brand && <div className="ft-body mb-2" style={{ fontSize: 12, color: C.inkSoft }}>{scannedProduct.brand}</div>}
+                  <div className="ft-mono mb-3" style={{ fontSize: 12, color: C.inkSoft }}>
+                    Per 100g: {Math.round(scannedProduct.per100g.calories)} kcal · P{Math.round(scannedProduct.per100g.protein_g)} C{Math.round(scannedProduct.per100g.carbs_g)} F{Math.round(scannedProduct.per100g.fat_g)}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="ft-body flex-shrink-0" style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>Quantity (g)</span>
+                    <input value={barcodeQuantity} onChange={(e) => setBarcodeQuantity(e.target.value)} inputMode="decimal"
+                      className="flex-1 p-2.5 rounded-xl ft-mono text-right" style={{ border: "none", background: C.bgBottom, color: C.ink, fontSize: 14, outline: "none" }} />
+                  </div>
+                  <button onClick={applyBarcodeQuantity} className="w-full flex items-center justify-center gap-2 py-3 mt-3 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 13.5, fontWeight: 600 }}>
+                    <Utensils size={15} /> Use this
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           {error && (<div className="flex items-start gap-2 p-2.5 mb-3 rounded-xl" style={{ background: C.pinkTint }}><AlertCircle size={15} color={C.pink} style={{ flexShrink: 0, marginTop: 1 }} /><span className="ft-body" style={{ fontSize: 12, color: C.pink }}>{error}</span></div>)}
-          <button onClick={() => analyze()} disabled={analyzing || compressing} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 14, fontWeight: 600, opacity: analyzing ? 0.7 : 1 }}>
-            {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Utensils size={16} />}{analyzing ? "Analyzing meal…" : "Analyze meal"}
-          </button>
-          {analyzing && <NutritionSkeleton />}
+          {mode !== "barcode" && (
+            <>
+              <button onClick={() => analyze()} disabled={analyzing || compressing} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 14, fontWeight: 600, opacity: analyzing ? 0.7 : 1 }}>
+                {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Utensils size={16} />}{analyzing ? "Analyzing meal…" : "Analyze meal"}
+              </button>
+              {analyzing && <NutritionSkeleton />}
+            </>
+          )}
           <button onClick={() => { setPending({ ...EMPTY_MEAL }); setAiEstimate(null); setShowWhyEstimate(false); }}
             className="w-full flex items-center justify-center py-2.5 mt-2 ft-body" style={{ color: C.inkSoft, fontSize: 12.5, fontWeight: 500 }}>Skip — enter nutrition manually</button>
         </>
@@ -3116,10 +3303,28 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
                     Why this estimate? <ChevronDown size={11} style={{ transform: showWhyEstimate ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
                   </button>
                 )}
+                {pending.items && pending.items.length > 1 && (
+                  <button onClick={() => setShowItemBreakdown((s) => !s)} className="ft-body flex items-center gap-1" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>
+                    Item breakdown ({pending.items.length}) <ChevronDown size={11} style={{ transform: showItemBreakdown ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
+                  </button>
+                )}
               </div>
               {showWhyEstimate && pending.estimate_basis && (
                 <div className="mt-2 p-2.5 rounded-xl" style={{ background: C.bgBottom }}>
                   <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4 }}>{pending.estimate_basis}</span>
+                </div>
+              )}
+              {showItemBreakdown && pending.items && pending.items.length > 1 && (
+                <div className="mt-2 p-2.5 rounded-xl flex flex-col gap-2" style={{ background: C.bgBottom }}>
+                  {pending.items.map((it, i) => (
+                    <div key={i} className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.food_name}</div>
+                        {it.estimated_portion && <div className="ft-body" style={{ fontSize: 11, color: C.inkSoft }}>{it.estimated_portion}</div>}
+                      </div>
+                      <span className="ft-mono flex-shrink-0" style={{ fontSize: 12, color: C.inkSoft }}>{Math.round(it.calories)} kcal · P{Math.round(it.protein_g)} C{Math.round(it.carbs_g)} F{Math.round(it.fat_g)}</span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
