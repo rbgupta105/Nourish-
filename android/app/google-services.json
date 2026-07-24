@@ -22,6 +22,14 @@
           }
         },
         {
+          "client_id": "280639878923-pq15ed2iq70505pg9nnhtsrfoirk5tou.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.rishabh.nourish",
+            "certificate_hash": "840ecf9966deb3cf71c679464a60df7bf29bce84"
+          }
+        },
+        {
           "client_id": "280639878923-48esvefmlafjqgnlqq95cekj3n09894t.apps.googleusercontent.com",
           "client_type": 3
         }

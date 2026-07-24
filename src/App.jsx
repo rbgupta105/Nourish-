@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   signInWithPopup,
+  signInWithCredential,
+  GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
 } from "firebase/auth";
@@ -1352,9 +1354,23 @@ export default function MealTracker() {
 const handleGoogleSignIn = async () => {
   try {
     if (window.Capacitor?.isNativePlatform?.()) {
-      await FirebaseAuthentication.signInWithGoogle({
+      const result = await FirebaseAuthentication.signInWithGoogle({
         useCredentialManager: false,
       });
+
+      // The native call above signs in on the Android/iOS side only. The JS
+      // Firebase Auth instance (which onAuthStateChanged below is watching)
+      // is a SEPARATE auth state and won't update on its own unless we
+      // explicitly hand it the same credential here.
+      const idToken = result?.credential?.idToken;
+      if (!idToken) {
+        throw new Error(
+          "Native Google sign-in returned no idToken — check that the Web client ID configured for the app matches the one in Firebase/Google Cloud."
+        );
+      }
+      const accessToken = result?.credential?.accessToken;
+      const credential = GoogleAuthProvider.credential(idToken, accessToken);
+      await signInWithCredential(auth, credential);
       return;
     }
 
