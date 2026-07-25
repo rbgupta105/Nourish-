@@ -517,6 +517,38 @@ async function hydrateLocalFromCloud(cloudData) {
   }
 }
 
+// ---------- Offline sync retry queue ----------
+// syncKeyToCloud can fail silently when the device has no connectivity — the
+// local save (saveKey) still succeeds, but the cloud write is just dropped.
+// This queue remembers the latest value per storage key that failed to sync,
+// persisted to localStorage so it survives a reload, and retries it once
+// connectivity returns (see the "online" listener + flush on sign-in below).
+const SYNC_QUEUE_KEY = "nourish-pending-sync";
+
+function readSyncQueue() {
+  try {
+    const raw = localStorage.getItem(SYNC_QUEUE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+function writeSyncQueue(queue) {
+  try { localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue)); } catch {}
+}
+function queueSyncRetry(key, value) {
+  const queue = readSyncQueue();
+  queue[key] = value;
+  writeSyncQueue(queue);
+}
+function clearSyncRetry(key) {
+  const queue = readSyncQueue();
+  if (key in queue) {
+    delete queue[key];
+    writeSyncQueue(queue);
+  }
+}
+
 // Ongoing two-way sync: called alongside every saveKey() so signed-in users'
 // changes keep flowing up to Firestore, not just on the one-time migration.
 async function syncKeyToCloud(user, key, value) {
@@ -524,8 +556,22 @@ async function syncKeyToCloud(user, key, value) {
   try {
     const userRef = doc(db, "users", user.uid);
     await setDoc(userRef, { [key]: value, updatedAt: serverTimestamp() }, { merge: true });
+    clearSyncRetry(key);
   } catch (error) {
     console.error("Nourish cloud sync failed:", key, error);
+    queueSyncRetry(key, value);
+  }
+}
+
+// Retries every key currently queued (called on sign-in and whenever the
+// browser/device comes back online). Anything that fails again — e.g. still
+// offline — simply stays queued for the next attempt.
+async function flushSyncQueue(user) {
+  if (!user?.uid) return;
+  const queue = readSyncQueue();
+  const keys = Object.keys(queue);
+  for (const key of keys) {
+    await syncKeyToCloud(user, key, queue[key]);
   }
 }
 
@@ -1217,6 +1263,20 @@ function CelebrationBanner({ celebrations, onDismiss }) {
   );
 }
 
+// Bottom-anchored toast with an Undo action, shown briefly after a delete.
+// Mirrors CelebrationBanner's overlay pattern (rounded card, floating above
+// the content) but anchored above the bottom nav instead of at the top.
+function UndoToast({ toast, onUndo }) {
+  if (!toast) return null;
+  return (
+    <div className="absolute left-4 right-4 flex items-center justify-between gap-3 px-4 py-3.5"
+      style={{ bottom: "calc(84px + env(safe-area-inset-bottom, 0px))", background: C.ink, borderRadius: 16, boxShadow: "0 8px 24px rgba(20,20,20,0.24)", zIndex: 60 }}>
+      <span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.onInk }}>{toast.message}</span>
+      <button onClick={onUndo} className="ft-body flex-shrink-0" style={{ fontSize: 13, fontWeight: 700, color: C.orange }}>Undo</button>
+    </div>
+  );
+}
+
 function Avatar({ initial, size = 46 }) {
   return (
     <div style={{ position: "relative", width: size, height: size }}>
@@ -1645,6 +1705,17 @@ export default function MealTracker() {
     return () => unsubscribe();
   }, []);
 
+  // Retry any cloud syncs that failed while offline: once on sign-in/reload
+  // (in case the app launched with pending items already queued), and again
+  // every time the device regains connectivity.
+  useEffect(() => {
+    if (!user) return;
+    flushSyncQueue(user);
+    const onOnline = () => flushSyncQueue(user);
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, [user]);
+
 const handleGoogleSignIn = async () => {
   try {
     if (window.Capacitor?.isNativePlatform?.()) {
@@ -1706,8 +1777,12 @@ const handleGoogleSignIn = async () => {
   const [profile, setProfile] = useState({ name: "" });
   const [goals, setGoals] = useState({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, dietType: "", cuisine: "" });
   const [logs, setLogs] = useState([]);
+  const logsRef = useRef(logs);
+  useEffect(() => { logsRef.current = logs; }, [logs]);
   const [weights, setWeights] = useState([]);
   const [exerciseLogs, setExerciseLogs] = useState([]);
+  const exerciseLogsRef = useRef(exerciseLogs);
+  useEffect(() => { exerciseLogsRef.current = exerciseLogs; }, [exerciseLogs]);
   const [favorites, setFavorites] = useState([]);
   const [waterLogs, setWaterLogs] = useState([]);
   const [sleepLogs, setSleepLogs] = useState([]);
@@ -1752,6 +1827,22 @@ const handleGoogleSignIn = async () => {
   const swipeStart = useRef(null); // { x, y } — tracked independently of the vertical pull gesture
   const [pullDistance, setPullDistance] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+
+  // ---------- Undo toast ----------
+  // Small safety net for deletes: keep the removed item around briefly so a
+  // mis-tap on Trash can be reversed instead of being permanently lost.
+  const [undoToast, setUndoToast] = useState(null); // { message, onUndo }
+  const undoTimerRef = useRef(null);
+  function showUndoToast(message, onUndo) {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setUndoToast({ message, onUndo });
+    undoTimerRef.current = setTimeout(() => setUndoToast(null), 4500);
+  }
+  function handleUndoTap() {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setUndoToast((current) => { current?.onUndo?.(); return null; });
+  }
+  useEffect(() => () => { if (undoTimerRef.current) clearTimeout(undoTimerRef.current); }, []);
   const PULL_THRESHOLD = 64;
   // Which day the Home dashboard is showing: 0 = today, 1 = yesterday, etc.
   // Swiping left/right between days is Home-only and read-only for past days.
@@ -1882,8 +1973,22 @@ const handleGoogleSignIn = async () => {
   async function persistMonthlyReview(next) { setMonthlyReview(next); await saveKey("monthly-review", next); syncKeyToCloud(user, "monthly-review", next); }
   async function persistFavorites(next) { setFavorites(next); await saveKey("favorite-meals", next); syncKeyToCloud(user, "favorite-meals", next); }
 
-  async function deleteLog(id) { haptic("delete"); await persistLogs(logs.filter((l) => l.id !== id)); }
-  async function deleteExercise(id) { haptic("delete"); await persistExercise(exerciseLogs.filter((e) => e.id !== id)); }
+  async function deleteLog(id) {
+    haptic("delete");
+    const removed = logs.find((l) => l.id === id);
+    await persistLogs(logs.filter((l) => l.id !== id));
+    if (removed) {
+      showUndoToast("Meal deleted", () => persistLogs([removed, ...logsRef.current.filter((l) => l.id !== id)]));
+    }
+  }
+  async function deleteExercise(id) {
+    haptic("delete");
+    const removed = exerciseLogs.find((e) => e.id === id);
+    await persistExercise(exerciseLogs.filter((e) => e.id !== id));
+    if (removed) {
+      showUndoToast("Exercise deleted", () => persistExercise([removed, ...exerciseLogsRef.current.filter((e) => e.id !== id)]));
+    }
+  }
 
   async function toggleFavorite(meal) {
     const key = (meal.food_name || "").trim().toLowerCase();
@@ -2241,6 +2346,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
       <MicroInteractionStyles />
       <MicroPulse pulse={pulse} />
       <CelebrationBanner celebrations={celebrations} onDismiss={dismissCelebration} />
+      <UndoToast toast={undoToast} onUndo={handleUndoTap} />
             <div ref={scrollRef} onTouchStart={onPullTouchStart} onTouchMove={onPullTouchMove} onTouchEnd={onPullTouchEnd}
               className="flex-1 overflow-y-auto px-4 pt-5" style={{ paddingBottom: 90 }}>
 
@@ -2575,8 +2681,8 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
               </div>
             )}
             <div className="flex gap-2 mb-4">
-              <Chip active={logsSubTab === "meals"} onClick={() => setLogsSubTab("meals")} label={`Meals (${logs.length})`} />
-              <Chip active={logsSubTab === "exercise"} onClick={() => setLogsSubTab("exercise")} label={`Exercise (${exerciseLogs.length})`} />
+              <Chip active={logsSubTab === "meals"} onClick={() => setLogsSubTab("meals")} label={`Meals (${logsDateFilter ? logs.filter((l) => l.date === logsDateFilter).length : logs.length})`} />
+              <Chip active={logsSubTab === "exercise"} onClick={() => setLogsSubTab("exercise")} label={`Exercise (${logsDateFilter ? exerciseLogs.filter((e) => e.date === logsDateFilter).length : exerciseLogs.length})`} />
             </div>
             {logsSubTab === "meals" ? (() => {
               const visibleMeals = logsDateFilter ? logs.filter((l) => l.date === logsDateFilter) : logs;
@@ -3999,7 +4105,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
     <div>      
     <div
       className="flex items-center justify-between p-4 mb-4"
-      style={{ background: C.card, borderRadius: 16 }}
+      style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}
     >
       <span
         className="ft-body"
@@ -4040,12 +4146,12 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
       </button>
     </div>
 
-      <button onClick={() => setGoalsSectionOpen((o) => !o)} className="w-full flex items-center justify-between p-4 mb-4" style={{ background: C.card, borderRadius: 16 }}>
+      <button onClick={() => setGoalsSectionOpen((o) => !o)} className="w-full flex items-center justify-between p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
         <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Daily goals</span>
         <ChevronDown size={16} color={C.inkSoft} style={{ transform: goalsSectionOpen ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
       </button>
       {goalsSectionOpen && (
-      <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16 }}>
+      <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
         <div className="flex items-center justify-end mb-1">
           <button onClick={toggleGoalsEditing} className="flex items-center gap-1 ft-body" style={{ fontSize: 12, fontWeight: 600, color: goalsEditing ? C.inkSoft : C.orange }}>
             {goalsEditing ? "Cancel" : <><Pencil size={12} /> Edit goals</>}
@@ -4100,7 +4206,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
       </div>
       )}
 
-      <button onClick={() => setExerciseSettingsOpen((o) => !o)} className="w-full flex items-center justify-between p-4 mb-4" style={{ background: C.card, borderRadius: 16 }}>
+      <button onClick={() => setExerciseSettingsOpen((o) => !o)} className="w-full flex items-center justify-between p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
         <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Exercise settings</span>
         <ChevronDown size={16} color={C.inkSoft} style={{ transform: exerciseSettingsOpen ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
       </button>
@@ -4376,7 +4482,7 @@ function WorkoutSplitEditor({ splits, onSave }) {
   }
 
   return (
-    <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 16 }}>
+    <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
       <input value={split.name} onChange={(e) => updateSplit({ ...split, name: e.target.value })} placeholder="Split name"
         className="w-full ft-body mb-3" style={{ fontSize: 14, fontWeight: 700, color: C.ink, background: "transparent", border: "none", outline: "none" }} />
       <div className="flex flex-col gap-3">
