@@ -18,7 +18,8 @@ import {
   Trash2, Loader2, TrendingUp, TrendingDown, Minus, X, Check,
   Flame, Trophy, Dumbbell, Wheat, Droplet, AlertCircle, Home, Activity, Sparkles,
   Star, Pencil, Copy, Droplets, ChevronLeft, ChevronRight, ChevronDown, CalendarDays, Gauge,
-  Bell, Award, Layers, Brain, Lightbulb, Mic, ScanBarcode, ThumbsUp, ThumbsDown
+  Bell, Award, Layers, Brain, Lightbulb, Mic, ScanBarcode, ThumbsUp, ThumbsDown,
+  Moon, BedDouble, AlarmClock, Sunrise, Scale
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis,
@@ -157,6 +158,32 @@ function isWeekday(dateStr) {
   const [y, m, day] = dateStr.split("-").map(Number);
   const dow = new Date(y, m - 1, day).getDay();
   return dow >= 1 && dow <= 5;
+}
+// Sunday is treated as a rest/holiday day for gym & workout tracking — a missed
+// Sunday shouldn't read as a "skipped" workout day anywhere in the app.
+function isSundayDate(dateStr) {
+  const [y, m, day] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, day).getDay() === 0;
+}
+// ---------- Sleep helpers ----------
+// Minutes between a "HH:MM" bedtime and "HH:MM" wake time, wrapping past midnight
+// (e.g. 22:45 -> 07:00 is a valid ~8h15m night, not a negative duration).
+function sleepDurationMinutes(bedtime, wakeTime) {
+  const [bh, bm] = (bedtime || "0:0").split(":").map(Number);
+  const [wh, wm] = (wakeTime || "0:0").split(":").map(Number);
+  let diff = (wh * 60 + wm) - (bh * 60 + bm);
+  if (diff <= 0) diff += 24 * 60;
+  return diff;
+}
+function fmtSleepDuration(mins) {
+  const h = Math.floor(mins / 60), m = Math.round(mins % 60);
+  return `${h}h ${m}m`;
+}
+function fmtTime12(hhmm) {
+  const [h, m] = (hhmm || "0:0").split(":").map(Number);
+  const period = h >= 12 ? "PM" : "AM";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, "0")} ${period}`;
 }
 
 // ---------- Weight pace projection ----------
@@ -424,6 +451,7 @@ const NOURISH_CLOUD_KEYS = [
   "meal-logs",
   "weight-logs",
   "water-logs",
+  "sleep-logs",
   "favorite-meals",
   "goals",
   "exercise-logs",
@@ -952,6 +980,10 @@ function computePeriodReviewStats(logs, exerciseLogs, waterLogs, weights, goals,
   }
 
   const gymDays = new Set(exerciseLogs.filter((e) => e.date >= thisStart).map((e) => e.date)).size;
+  // Sundays are treated as a rest/holiday day for gym tracking, so they're excluded
+  // from the "expected" gym days rather than counted as missed sessions.
+  let expectedGymDays = 0;
+  for (let i = periodDays - 1; i >= 0; i--) { if (!isSundayDate(daysAgo(i))) expectedGymDays++; }
   const avgWater = waterLogs.filter((w) => w.date >= thisStart).reduce((s, w) => s + num(w.ml), 0) / periodDays;
   const weightPace = computeWeightPace(weights.filter((w) => new Date(w.timestamp).getTime() >= Date.now() - (periodDays * 2 - 1) * 86400000));
 
@@ -970,7 +1002,7 @@ function computePeriodReviewStats(logs, exerciseLogs, waterLogs, weights, goals,
     periodDays,
     avgCalories: Math.round(avgCalories), avgProtein: Math.round(avgProtein), avgCarbs: Math.round(avgCarbs), avgFat: Math.round(avgFat),
     proteinChangePct: pctChange(avgProtein, prevAvgProtein), calorieChangePct: pctChange(avgCalories, prevAvgCalories),
-    consistencyPct, gymDays, avgWaterL: Math.round((avgWater / 1000) * 10) / 10,
+    consistencyPct, gymDays, expectedGymDays, avgWaterL: Math.round((avgWater / 1000) * 10) / 10,
     weightPace, daysLoggedThisPeriod, calorieGoalDays, goals,
   };
 }
@@ -988,7 +1020,7 @@ This ${periodLabel}'s averages: ${stats.avgCalories} kcal/day, ${stats.avgProtei
 Protein vs. ${priorLabel}: ${stats.proteinChangePct == null ? "no prior data" : `${stats.proteinChangePct > 0 ? "+" : ""}${stats.proteinChangePct}%`}.
 Calories vs. ${priorLabel}: ${stats.calorieChangePct == null ? "no prior data" : `${stats.calorieChangePct > 0 ? "+" : ""}${stats.calorieChangePct}%`}.
 Day-to-day calorie consistency: ${stats.consistencyPct == null ? "not enough data" : `${stats.consistencyPct}% swing from the ${periodLabel} average (lower = steadier)`}.
-Gym days this ${periodLabel}: ${stats.gymDays}/${stats.periodDays}.
+Gym days this ${periodLabel}: ${stats.gymDays}/${stats.expectedGymDays} (Sundays are rest days and don't count against this).
 Average water: ${stats.avgWaterL}L/day (goal ${(stats.goals.water || 2000) / 1000}L).
 Weight trend: ${stats.weightPace ? `${stats.weightPace.paceKgPerWeek > 0 ? "+" : ""}${stats.weightPace.paceKgPerWeek.toFixed(2)}kg/week` : "not enough weigh-ins"}.
 Days with at least one meal logged: ${stats.daysLoggedThisPeriod}/${stats.periodDays}.
@@ -1334,6 +1366,52 @@ function MacroPill({ icon: Icon, iconBg, iconColor, label, value, unit, pct }) {
   );
 }
 
+// Home "Water" card — a wavy fill visual (per the reference design) sized to
+// today's progress toward the water goal, with +/- controls in the header.
+// Uses the same C.blue / C.card tokens as the rest of the app (light & dark).
+function WaterWaveCard({ todayWater, goalMl, onAdd, onRemove, compact }) {
+  const pct = clamp(goalMl > 0 ? (todayWater / goalMl) * 100 : 0, 0, 100);
+  const fillPct = Math.max(pct, todayWater > 0 ? 6 : 0);
+  const waveHeight = compact ? 90 : 130;
+  const lightOnFill = pct > (compact ? 45 : 38); // once the wave covers most of the number, switch it to a light color for contrast
+  return (
+    <div className={compact ? "" : "mb-4"} style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", overflow: "hidden", height: compact ? "100%" : undefined }}>
+      <style>{`
+        @keyframes waterWaveScroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+        .water-wave-back { animation: waterWaveScroll 9s linear infinite; }
+        .water-wave-front { animation: waterWaveScroll 6s linear infinite reverse; }
+      `}</style>
+      <div className={compact ? "flex items-center justify-between p-4 pb-2" : "flex items-center justify-between p-4 pb-3"}>
+        <div className="flex items-center gap-2">
+          <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.blueTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <Droplets size={15} color={C.blue} />
+          </div>
+          <span className="ft-display" style={{ fontSize: compact ? 15 : 18, fontWeight: 700, color: C.ink }}>Water</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button onClick={onRemove} disabled={todayWater === 0} className="flex items-center justify-center" style={{ width: compact ? 22 : 30, height: compact ? 22 : 30, borderRadius: "50%", background: C.bgBottom, opacity: todayWater === 0 ? 0.4 : 1, border: "none", flexShrink: 0 }}><Minus size={compact ? 10 : 14} color={C.inkSoft} /></button>
+          <button onClick={onAdd} className="flex items-center justify-center" style={{ width: compact ? 22 : 30, height: compact ? 22 : 30, borderRadius: "50%", background: C.blueTint, border: "none", flexShrink: 0 }}><Plus size={compact ? 10 : 14} color={C.blue} /></button>
+        </div>
+      </div>
+      <div style={{ position: "relative", height: waveHeight, overflow: "hidden" }}>
+        <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: `${fillPct}%`, transition: "height .6s ease", overflow: "hidden" }}>
+          <svg className="water-wave-back" viewBox="0 0 400 40" preserveAspectRatio="none" style={{ position: "absolute", top: -16, left: 0, width: "200%", height: 24, display: "block" }}>
+            <path d="M0 20 Q 50 5 100 20 T 200 20 T 300 20 T 400 20 V40 H0 Z" fill={C.blue} opacity="0.45" />
+          </svg>
+          <svg className="water-wave-front" viewBox="0 0 400 40" preserveAspectRatio="none" style={{ position: "absolute", top: -10, left: 0, width: "200%", height: 22, display: "block" }}>
+            <path d="M0 20 Q 50 32 100 20 T 200 20 T 300 20 T 400 20 V40 H0 Z" fill={C.blue} opacity="0.75" />
+          </svg>
+          <div style={{ position: "absolute", left: 0, right: 0, top: 8, bottom: 0, background: C.blue }} />
+        </div>
+        <div className="flex flex-col items-center justify-center" style={{ position: "absolute", inset: 0 }}>
+          <span className="ft-display" style={{ fontSize: compact ? 19 : 26, fontWeight: 700, color: lightOnFill ? "#fff" : C.ink, transition: "color .3s ease" }}>{Math.round(todayWater)} ml</span>
+          <span className="ft-body" style={{ fontSize: compact ? 10.5 : 12, color: lightOnFill ? "rgba(255,255,255,0.85)" : C.inkSoft, transition: "color .3s ease" }}>/ {Math.round(goalMl)} ml goal</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // A week at a glance, colored by how close each day landed to its goals —
 // meant to answer "how consistent was I" faster than reading a line chart.
 // Deliberately NOT wrapped in its own bordered card (see the "fewer boxes"
@@ -1632,6 +1710,10 @@ const handleGoogleSignIn = async () => {
   const [exerciseLogs, setExerciseLogs] = useState([]);
   const [favorites, setFavorites] = useState([]);
   const [waterLogs, setWaterLogs] = useState([]);
+  const [sleepLogs, setSleepLogs] = useState([]);
+  const [showSleep, setShowSleep] = useState(false);
+  const [weightAddOpen, setWeightAddOpen] = useState(false);
+  const [weightInputHome, setWeightInputHome] = useState("");
   const [splits, setSplits] = useState([]);
   const [dailyCoach, setDailyCoach] = useState(null); // { date, summary, suggestions }
   const [weeklyReview, setWeeklyReview] = useState(null); // { weekStart, summary, focusNextWeek, generatedAt }
@@ -1639,7 +1721,7 @@ const handleGoogleSignIn = async () => {
   const [editingEntry, setEditingEntry] = useState(null);
 
   const loadAll = useCallback(async () => {
-    const [p, g, l, w, e, f, wa, sp, dc, wr, mr] = await Promise.all([
+    const [p, g, l, w, e, f, wa, sl, sp, dc, wr, mr] = await Promise.all([
       loadKey("profile", { name: "" }),
       loadKey("goals", { calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0 }),
       loadKey("meal-logs", []),
@@ -1647,12 +1729,13 @@ const handleGoogleSignIn = async () => {
       loadKey("exercise-logs", []),
       loadKey("favorite-meals", []),
       loadKey("water-logs", []),
+      loadKey("sleep-logs", []),
       loadKey("workout-splits", DEFAULT_SPLITS),
       loadKey("daily-coach", null),
       loadKey("weekly-review", null),
       loadKey("monthly-review", null),
     ]);
-    setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, dietType: "", cuisine: "", ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setWaterLogs(wa); setSplits(sp); setDailyCoach(dc); setWeeklyReview(wr); setMonthlyReview(mr); setReady(true);
+    setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, dietType: "", cuisine: "", ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setWaterLogs(wa); setSleepLogs(sl); setSplits(sp); setDailyCoach(dc); setWeeklyReview(wr); setMonthlyReview(mr); setReady(true);
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
@@ -1763,11 +1846,26 @@ const handleGoogleSignIn = async () => {
 
   async function persistLogs(next) { setLogs(next); await saveKey("meal-logs", next); syncKeyToCloud(user, "meal-logs", next); }
   async function persistWeights(next) { setWeights(next); await saveKey("weight-logs", next); syncKeyToCloud(user, "weight-logs", next); }
+  async function addWeightEntry(w) {
+    const entry = { id: uid(), date: todayStr(), timestamp: Date.now(), weight: w };
+    haptic("success");
+    firePulse("weight");
+    await persistWeights([entry, ...weights.filter((x) => x.date !== todayStr())]);
+  }
+  async function deleteWeightEntry(id) { haptic("delete"); await persistWeights(weights.filter((w) => w.id !== id)); }
   async function persistWater(next) { setWaterLogs(next); await saveKey("water-logs", next); syncKeyToCloud(user, "water-logs", next); }
   async function addWater(ml) {
     haptic("light");
     await persistWater([{ id: uid(), date: todayStr(), ml, timestamp: Date.now() }, ...waterLogs]);
   }
+  async function persistSleep(next) { setSleepLogs(next); await saveKey("sleep-logs", next); syncKeyToCloud(user, "sleep-logs", next); }
+  async function addSleep(bedtime, wakeTime) {
+    const entry = { id: uid(), date: todayStr(), bedtime, wakeTime, durationMinutes: sleepDurationMinutes(bedtime, wakeTime), timestamp: Date.now() };
+    haptic("success");
+    firePulse("sleep");
+    await persistSleep([entry, ...sleepLogs.filter((s) => s.date !== todayStr())]);
+  }
+  async function deleteSleep(id) { haptic("delete"); await persistSleep(sleepLogs.filter((s) => s.id !== id)); }
   async function removeLastWater() {
     const idx = waterLogs.findIndex((w) => w.date === todayStr());
     if (idx === -1) return;
@@ -1829,6 +1927,8 @@ const handleGoogleSignIn = async () => {
   const weeklyConsistency = useMemo(() => computeWeeklyConsistency(logs, goals, 7), [logs, goals]);
   const periodSummary = useMemo(() => computePeriodSummary(logs, chartsPeriod === "week" ? 7 : 30), [logs, chartsPeriod]);
   const todayWater = useMemo(() => waterLogs.filter((w) => w.date === todayStr()).reduce((s, w) => s + num(w.ml), 0), [waterLogs]);
+  const todaySleep = useMemo(() => sleepLogs.find((s) => s.date === todayStr()) || null, [sleepLogs]);
+  const latestWeight = useMemo(() => (weights.length ? [...weights].sort((a, b) => b.timestamp - a.timestamp)[0] : null), [weights]);
   const nutritionScore = useMemo(() => computeNutritionScore({ todayTotals, todayLogs, goals, waterMl: todayWater }), [todayTotals, todayLogs, goals, todayWater]);
   const microSummary = useMemo(() => computeMicronutrientSummary(todayLogs, goals), [todayLogs, goals, darkMode]);
   const weeklyAchievement = useMemo(() => computeWeeklyAchievement(logs, goals), [logs, goals]);
@@ -1857,6 +1957,7 @@ const handleGoogleSignIn = async () => {
       meal: { icon: Utensils, color: C.orange, bg: C.orangeTint },
       weight: { icon: TrendingUp, color: C.blue, bg: C.blueTint },
       workout: { icon: Dumbbell, color: C.blue, bg: C.blueTint },
+      sleep: { icon: Moon, color: C.purple, bg: C.purpleTint },
     };
     clearTimeout(pulseTimerRef.current);
     setPulse(defs[kind] || defs.meal);
@@ -2297,51 +2398,128 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
             </div>
             <div className="flex gap-2.5 mb-4">
               <MacroPill icon={Droplets} iconBg={C.blueTint} iconColor={C.blue} label="Water" value={Math.round((viewedIsToday ? todayWater : viewedWater) / 1000 * 10) / 10} unit="L" pct={goals.water > 0 ? ((viewedIsToday ? todayWater : viewedWater) / goals.water) * 100 : 0} />
-              <MacroPill icon={Dumbbell} iconBg={C.greenTint} iconColor={C.green} label="Workout" value={viewedExerciseLogs.length > 0 ? "Done" : "Rest"} unit="" pct={viewedExerciseLogs.length > 0 ? 100 : 0} />
-              <div style={{ flex: 1 }} />
-            </div>
-
-            <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
-              <div className="flex items-center gap-3">
-                <div style={{ width: 46, height: 46, borderRadius: "50%", background: nutritionScore.total >= 80 ? C.greenTint : nutritionScore.total >= 55 ? C.tanTint : C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <Gauge size={20} color={nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>Today's Nutrition Score</span>
-                    <span className="ft-mono" style={{ fontSize: 14, fontWeight: 700, color: nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink }}><AnimatedNumber value={nutritionScore.total} />/100</span>
-                  </div>
-                  <div className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4, marginTop: 1 }}>{nutritionScore.summary}</div>
-                </div>
-              </div>
+              <MacroPill icon={Dumbbell} iconBg={viewedExerciseLogs.length > 0 ? C.greenTint : isSundayDate(viewedDate) ? C.tanTint : C.greenTint} iconColor={viewedExerciseLogs.length > 0 ? C.green : isSundayDate(viewedDate) ? C.tan : C.green} label="Workout" value={viewedExerciseLogs.length > 0 ? "Done" : isSundayDate(viewedDate) ? "Holiday" : "Rest"} unit="" pct={viewedExerciseLogs.length > 0 || isSundayDate(viewedDate) ? 100 : 0} />
             </div>
 
             {!viewedIsToday ? (
-              <div className="p-4 mb-6 flex items-center gap-2.5" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
-                <CalendarDays size={16} color={C.inkSoft} />
-                <span className="ft-body flex-1" style={{ fontSize: 12.5, color: C.inkSoft }}>Viewing {fmtDate(viewedDate)}'s log. Water tracking and the AI coach only run for today.</span>
-                <button onClick={() => setDashDayOffset(0)} className="ft-body flex-shrink-0" style={{ fontSize: 12, color: C.orange, fontWeight: 600 }}>Back to today</button>
-              </div>
+              <>
+                <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+                  <div className="flex items-center gap-3">
+                    <div style={{ width: 46, height: 46, borderRadius: "50%", background: nutritionScore.total >= 80 ? C.greenTint : nutritionScore.total >= 55 ? C.tanTint : C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <Gauge size={20} color={nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>Today's Nutrition Score</span>
+                        <span className="ft-mono" style={{ fontSize: 14, fontWeight: 700, color: nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink }}><AnimatedNumber value={nutritionScore.total} />/100</span>
+                      </div>
+                      <div className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4, marginTop: 1 }}>{nutritionScore.summary}</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="p-4 mb-6 flex items-center gap-2.5" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+                  <CalendarDays size={16} color={C.inkSoft} />
+                  <span className="ft-body flex-1" style={{ fontSize: 12.5, color: C.inkSoft }}>Viewing {fmtDate(viewedDate)}'s log. Weight, sleep, water tracking and the AI coach only run for today.</span>
+                  <button onClick={() => setDashDayOffset(0)} className="ft-body flex-shrink-0" style={{ fontSize: 12, color: C.orange, fontWeight: 600 }}>Back to today</button>
+                </div>
+              </>
             ) : (
-              <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
-                <div className="flex items-center justify-between mb-2.5">
-                  <div className="flex items-center gap-2">
-                    <Droplets size={16} color={C.blue} />
-                    <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>Water</span>
+              // Score / Weight / Sleep / Water — 2x2 grid of big tiles
+              <div className="grid grid-cols-2 gap-3 mb-6">
+                {/* Score tile */}
+                <div className="p-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+                  <div className="flex items-center gap-2 mb-2.5">
+                    <div style={{ width: 30, height: 30, borderRadius: "50%", background: nutritionScore.total >= 80 ? C.greenTint : nutritionScore.total >= 55 ? C.tanTint : C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <Gauge size={15} color={nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink} />
+                    </div>
+                    <span className="ft-display" style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>Score</span>
                   </div>
-                  <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>{(todayWater / 1000).toFixed(2).replace(/\.?0+$/, "") || 0}L / {(goals.water / 1000).toFixed(1)}L</span>
+                  <div className="flex items-baseline gap-1 mb-1">
+                    <span className="ft-display" style={{ fontSize: 26, fontWeight: 700, color: nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink }}><AnimatedNumber value={nutritionScore.total} /></span>
+                    <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>/100</span>
+                  </div>
+                  <div className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft, lineHeight: 1.35, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{nutritionScore.summary}</div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 flex gap-1">
-                    {Array.from({ length: Math.max(1, Math.round(goals.water / 250)) }).map((_, i) => (
-                      <div key={i} style={{ flex: 1, height: 10, borderRadius: 4, background: i < Math.round(todayWater / 250) ? C.blue : C.track, transition: "background .3s ease" }} />
-                    ))}
+
+                {/* Weight tile */}
+                <div className="p-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+                  <div className="flex items-center justify-between mb-2.5">
+                    <div className="flex items-center gap-2">
+                      <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <Scale size={15} color={C.orange} />
+                      </div>
+                      <span className="ft-display" style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>Weight</span>
+                    </div>
+                    {latestWeight && (
+                      <button onClick={() => deleteWeightEntry(latestWeight.id)} className="flex items-center justify-center" style={{ width: 22, height: 22, borderRadius: "50%", background: C.bgBottom, border: "none", flexShrink: 0 }}>
+                        <Minus size={10} color={C.inkSoft} />
+                      </button>
+                    )}
                   </div>
-                  <button onClick={removeLastWater} disabled={todayWater === 0} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.bgBottom, opacity: todayWater === 0 ? 0.4 : 1, flexShrink: 0 }}><Minus size={14} color={C.inkSoft} /></button>
-                    <button onClick={() => addWater(250)} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.blueTint, flexShrink: 0 }}><Plus size={14} color={C.blue} /></button>
+                  <div className="flex items-baseline gap-1 mb-1.5">
+                    <span className="ft-display" style={{ fontSize: 26, fontWeight: 700, color: C.ink }}>{latestWeight ? latestWeight.weight : "0.0"}</span>
+                    <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>kg</span>
                   </div>
+                  {weightAddOpen ? (
+                    <div className="flex items-center gap-1.5">
+                      <input type="number" inputMode="decimal" autoFocus value={weightInputHome} onChange={(e) => setWeightInputHome(e.target.value)} placeholder="kg"
+                        className="ft-mono" style={{ width: "100%", padding: "7px 10px", borderRadius: 12, border: "none", background: C.bgBottom, color: C.ink, fontSize: 13, outline: "none" }} />
+                      <button
+                        onClick={() => { const w = num(weightInputHome, null); if (w) { addWeightEntry(w); setWeightInputHome(""); setWeightAddOpen(false); } }}
+                        className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.orange, flexShrink: 0 }}>
+                        <Check size={13} color="#fff" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setWeightAddOpen(true)} className="ft-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.orange }}>Add Weight</button>
+                  )}
                 </div>
-              )}
+
+                {/* Sleep tile — tap through to the full Sleep Tracker screen. The
+                    floating "Z" letters are a purely decorative background layer,
+                    clipped to this card's own bounds (overflow: hidden) so the
+                    animation never bleeds into neighboring tiles. */}
+                <button onClick={() => setShowSleep(true)} className="text-left p-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", border: "none", position: "relative", overflow: "hidden" }}>
+                  <style>{`
+                    @keyframes sleepZFloat1 { 0% { transform: translate(0px, 6px) rotate(-4deg); opacity: 0; } 12% { opacity: 0.5; } 50% { transform: translate(10px, -30px) rotate(6deg); } 88% { opacity: 0.15; } 100% { transform: translate(-6px, -66px) rotate(-3deg); opacity: 0; } }
+                    @keyframes sleepZFloat2 { 0% { transform: translate(0px, 6px) rotate(3deg); opacity: 0; } 15% { opacity: 0.55; } 50% { transform: translate(-9px, -28px) rotate(-7deg); } 85% { opacity: 0.15; } 100% { transform: translate(7px, -62px) rotate(4deg); opacity: 0; } }
+                    @keyframes sleepZFloat3 { 0% { transform: translate(0px, 6px) rotate(-2deg); opacity: 0; } 18% { opacity: 0.45; } 50% { transform: translate(8px, -26px) rotate(5deg); } 82% { opacity: 0.12; } 100% { transform: translate(-8px, -58px) rotate(-5deg); opacity: 0; } }
+                    .sleep-z-1 { animation: sleepZFloat1 4.2s ease-in-out infinite; }
+                    .sleep-z-2 { animation: sleepZFloat2 3.6s ease-in-out infinite .9s; }
+                    .sleep-z-3 { animation: sleepZFloat3 5s ease-in-out infinite 1.8s; }
+                  `}</style>
+                  <div className="sleep-z-1 ft-display" style={{ position: "absolute", right: 16, bottom: 10, fontSize: 13, fontWeight: 700, color: C.purple, pointerEvents: "none" }}>z</div>
+                  <div className="sleep-z-2 ft-display" style={{ position: "absolute", right: 30, bottom: 10, fontSize: 17, fontWeight: 700, color: C.purple, pointerEvents: "none" }}>Z</div>
+                  <div className="sleep-z-3 ft-display" style={{ position: "absolute", right: 10, bottom: 10, fontSize: 20, fontWeight: 700, color: C.purple, pointerEvents: "none" }}>Z</div>
+                  <div style={{ position: "relative" }}>
+                    <div className="flex items-center justify-between mb-2.5">
+                      <div className="flex items-center gap-2">
+                        <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.purpleTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <Moon size={15} color={C.purple} />
+                        </div>
+                        <span className="ft-display" style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>Sleep</span>
+                      </div>
+                      {todaySleep && (
+                        <button onClick={(e) => { e.stopPropagation(); deleteSleep(todaySleep.id); }} className="flex items-center justify-center" style={{ width: 22, height: 22, borderRadius: "50%", background: C.bgBottom, border: "none", flexShrink: 0 }}>
+                          <Minus size={10} color={C.inkSoft} />
+                        </button>
+                      )}
+                    </div>
+                    {todaySleep ? (
+                      <>
+                        <div className="ft-display mb-1" style={{ fontSize: 22, fontWeight: 700, color: C.ink }}>{fmtSleepDuration(todaySleep.durationMinutes)}</div>
+                        <div className="ft-mono" style={{ fontSize: 11.5, color: C.inkSoft }}>{fmtTime12(todaySleep.bedtime)} → {fmtTime12(todaySleep.wakeTime)}</div>
+                      </>
+                    ) : (
+                      <span className="ft-body" style={{ fontSize: 13, color: C.inkSoft, fontStyle: "italic" }}>No sleep logged</span>
+                    )}
+                  </div>
+                </button>
+
+                {/* Water tile — keeps the animated wave fill */}
+                <WaterWaveCard compact todayWater={todayWater} goalMl={goals.water} onAdd={() => addWater(250)} onRemove={removeLastWater} />
+              </div>
+            )}
 
             {viewedIsToday && (
             <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
@@ -2795,24 +2973,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
     goals={goals}
     onSaveGoals={persistGoals}
     weights={weights}
-    onAddWeight={async (w) => {
-      const entry = {
-        id: uid(),
-        date: todayStr(),
-        timestamp: Date.now(),
-        weight: w,
-      };
-      haptic("success");
-      firePulse("weight");
-      await persistWeights([
-        entry,
-        ...weights.filter((x) => x.date !== todayStr()),
-      ]);
-    }}
-    onDeleteWeight={async (id) => {
-      haptic("delete");
-      await persistWeights(weights.filter((w) => w.id !== id));
-    }}
+    onDeleteWeight={deleteWeightEntry}
     darkMode={darkMode}
     setDarkMode={setDarkMode}
     splits={splits}
@@ -2876,6 +3037,13 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
             if (!exists) { firePulse("workout"); setJustAddedId(entry.id); setTimeout(() => setJustAddedId(null), 1200); }
             setShowAdd(false); setEditingEntry(null);
           }}
+        />
+      )}
+      {showSleep && (
+        <SleepTrackerScreen
+          sleepLogs={sleepLogs}
+          onSave={(bedtime, wakeTime) => addSleep(bedtime, wakeTime)}
+          onClose={() => setShowSleep(false)}
         />
       )}
     </div>
@@ -3786,10 +3954,9 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry, splits }) {
 
 
    
-function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight, darkMode, setDarkMode, splits, onSaveSplits }) {
+function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, setDarkMode, splits, onSaveSplits }) {
   const [local, setLocal] = useState(goals);
   const [saved, setSaved] = useState(false);
-  const [weightInput, setWeightInput] = useState("");
   const [goalsEditing, setGoalsEditing] = useState(false);
   const [exerciseSettingsOpen, setExerciseSettingsOpen] = useState(false);
   useEffect(() => setLocal(goals), [goals]);
@@ -3914,11 +4081,9 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
         )}
       </div>
 
-      <div className="ft-body mb-3" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Weight</div>
-      <div className="flex gap-2 mb-4">
-        <input type="number" inputMode="decimal" value={weightInput} onChange={(e) => setWeightInput(e.target.value)} placeholder="Today's weight"
-          className="flex-1 p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 14, outline: "none" }} />
-        <button onClick={() => { const w = num(weightInput, null); if (w) { onAddWeight(w); setWeightInput(""); } }} className="flex items-center justify-center px-4 rounded-2xl" style={{ background: C.orange }}><Plus size={18} color="#fff" /></button>
+      <div className="flex items-center justify-between mb-3">
+        <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Weight</span>
+        <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>Add new entries from Home</span>
       </div>
       {weights.length === 0 ? <EmptyState text="No weight entries yet." /> : (
         <div className="flex flex-col gap-2">
@@ -3942,6 +4107,149 @@ function ProfilePanel({ goals, onSaveGoals, weights, onAddWeight, onDeleteWeight
           <WorkoutSplitEditor splits={splits} onSave={onSaveSplits} />
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------- Sleep Tracker ----------
+// Full-screen page opened from the Home "Sleep" card. A decorative 24-hour dial
+// (drawn with SVG arcs — no drag physics, since the actual time selection is done
+// via native time pickers triggered by tapping the bedtime/wake handles or the
+// labels below, same pattern as the existing date-jump control on Home) shows the
+// selected sleep window at a glance; "Log Sleep" saves one entry per day.
+function angleForHour(h) { return (h / 24) * 360 - 90; }
+function polarPoint(cx, cy, r, angleDeg) {
+  const rad = (angleDeg * Math.PI) / 180;
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+}
+function describeSleepArc(cx, cy, r, startHour, endHour) {
+  const startAngle = angleForHour(startHour);
+  const sweep = ((endHour - startHour) + 24) % 24 * 15; // 15deg per hour
+  const endAngle = startAngle + sweep;
+  const start = polarPoint(cx, cy, r, startAngle);
+  const end = polarPoint(cx, cy, r, endAngle);
+  const largeArcFlag = sweep > 180 ? 1 : 0;
+  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 1 ${end.x} ${end.y}`;
+}
+function SleepDial({ bedtime, wakeTime, onTapBedtime, onTapWake }) {
+  const size = 240, cx = size / 2, cy = size / 2, r = 96, trackWidth = 15;
+  const [bh, bm] = bedtime.split(":").map(Number);
+  const [wh, wm] = wakeTime.split(":").map(Number);
+  const bedHour = bh + bm / 60, wakeHour = wh + wm / 60;
+  const arcPath = describeSleepArc(cx, cy, r, bedHour, wakeHour);
+  const bedPos = polarPoint(cx, cy, r, angleForHour(bedHour));
+  const wakePos = polarPoint(cx, cy, r, angleForHour(wakeHour));
+  const moonPos = polarPoint(cx, cy, r - trackWidth / 2 - 16, angleForHour(0));
+  const sunPos = polarPoint(cx, cy, r - trackWidth / 2 - 16, angleForHour(12));
+  const durationMins = sleepDurationMinutes(bedtime, wakeTime);
+
+  return (
+    <div className="relative flex items-center justify-center" style={{ width: size, height: size, margin: "0 auto" }}>
+      <svg width={size} height={size} style={{ position: "absolute", inset: 0 }}>
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke={C.track} strokeWidth={trackWidth} />
+        <path d={arcPath} fill="none" stroke={C.blue} strokeWidth={trackWidth} strokeLinecap="round" />
+        {Array.from({ length: 12 }).map((_, i) => {
+          const h = i * 2;
+          const p1 = polarPoint(cx, cy, r - trackWidth / 2 - 4, angleForHour(h));
+          return (
+            <text key={h} x={p1.x} y={p1.y} textAnchor="middle" dominantBaseline="middle" fontSize="10" fontWeight="600" fill={C.inkSoft} fontFamily="inherit">{h}</text>
+          );
+        })}
+      </svg>
+      <Moon size={13} color={C.purple} style={{ position: "absolute", left: moonPos.x - 6.5, top: moonPos.y - 6.5 }} />
+      <Sunrise size={13} color={C.tan} style={{ position: "absolute", left: sunPos.x - 6.5, top: sunPos.y - 6.5 }} />
+      <button onClick={onTapBedtime} className="flex items-center justify-center" style={{ position: "absolute", left: bedPos.x - 17, top: bedPos.y - 17, width: 34, height: 34, borderRadius: "50%", background: C.blue, border: `3px solid ${C.card}`, boxShadow: "0 2px 8px rgba(0,0,0,0.2)" }}>
+        <BedDouble size={15} color="#fff" />
+      </button>
+      <button onClick={onTapWake} className="flex items-center justify-center" style={{ position: "absolute", left: wakePos.x - 17, top: wakePos.y - 17, width: 34, height: 34, borderRadius: "50%", background: C.green, border: `3px solid ${C.card}`, boxShadow: "0 2px 8px rgba(0,0,0,0.2)" }}>
+        <AlarmClock size={15} color="#fff" />
+      </button>
+      <div className="flex flex-col items-center" style={{ position: "absolute" }}>
+        <span className="ft-display" style={{ fontSize: 24, fontWeight: 700, color: C.ink }}>{fmtSleepDuration(durationMins)}</span>
+      </div>
+    </div>
+  );
+}
+function SleepTrackerScreen({ sleepLogs, onSave, onClose }) {
+  const latest = sleepLogs.length ? [...sleepLogs].sort((a, b) => b.timestamp - a.timestamp)[0] : null;
+  const [bedtime, setBedtime] = useState(latest ? latest.bedtime : "22:45");
+  const [wakeTime, setWakeTime] = useState(latest ? latest.wakeTime : "07:00");
+  const [reminderOn, setReminderOn] = useState(false); // display-only toggle, matches the reference design
+  const bedInputRef = useRef(null);
+  const wakeInputRef = useRef(null);
+  const durationMins = sleepDurationMinutes(bedtime, wakeTime);
+
+  function openPicker(ref) {
+    const el = ref.current;
+    if (!el) return;
+    if (el.showPicker) el.showPicker(); else el.click();
+  }
+
+  return (
+    <div className="absolute inset-0 flex flex-col" style={{ background: `linear-gradient(180deg, ${C.bgTop} 0%, ${C.bgBottom} 100%)`, zIndex: 50 }}>
+      <div className="flex items-center px-4" style={{ paddingTop: "calc(16px + env(safe-area-inset-top, 0px))", paddingBottom: 12 }}>
+        <button onClick={onClose} className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: "50%", background: C.card, border: "none" }}>
+          <ChevronLeft size={17} color={C.ink} />
+        </button>
+        <span className="ft-display flex-1 text-center" style={{ fontSize: 17, fontWeight: 700, color: C.ink, marginRight: 34 }}>Sleep Tracker</span>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4" style={{ paddingBottom: 32 }}>
+        <div className="p-5 mb-4" style={{ background: C.card, borderRadius: 24, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+          <SleepDial bedtime={bedtime} wakeTime={wakeTime} onTapBedtime={() => openPicker(bedInputRef)} onTapWake={() => openPicker(wakeInputRef)} />
+
+          <div className="flex items-center justify-around mt-5">
+            <div className="relative flex flex-col items-center">
+              <div className="flex items-center gap-1.5 mb-1">
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.blue }} />
+                <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.inkSoft }}>Bedtime</span>
+              </div>
+              <button onClick={() => openPicker(bedInputRef)} className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink, background: "none", border: "none" }}>{fmtTime12(bedtime)}</button>
+              <input ref={bedInputRef} type="time" value={bedtime} onChange={(e) => setBedtime(e.target.value)} style={{ position: "absolute", inset: 0, opacity: 0, pointerEvents: "none" }} />
+            </div>
+            <div className="relative flex flex-col items-center">
+              <div className="flex items-center gap-1.5 mb-1">
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.green }} />
+                <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.inkSoft }}>Wake Up Time</span>
+              </div>
+              <button onClick={() => openPicker(wakeInputRef)} className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink, background: "none", border: "none" }}>{fmtTime12(wakeTime)}</button>
+              <input ref={wakeInputRef} type="time" value={wakeTime} onChange={(e) => setWakeTime(e.target.value)} style={{ position: "absolute", inset: 0, opacity: 0, pointerEvents: "none" }} />
+            </div>
+          </div>
+
+          <button onClick={() => { onSave(bedtime, wakeTime); onClose(); }} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body mt-5"
+            style={{ background: C.blue, color: "#fff", fontSize: 15, fontWeight: 700, border: "none" }}>
+            <Moon size={15} /> Log Sleep
+          </button>
+        </div>
+
+        <div className="flex items-center justify-between p-4" style={{ background: C.card, borderRadius: 16 }}>
+          <div>
+            <div className="ft-body" style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>Bedtime reminder</div>
+            <div className="ft-body" style={{ fontSize: 12, color: C.inkSoft, marginTop: 1 }}>Limit screen time before bed</div>
+          </div>
+          <button
+            onClick={() => setReminderOn((o) => !o)}
+            aria-pressed={reminderOn}
+            className="relative"
+            style={{ width: 48, height: 28, borderRadius: 999, background: reminderOn ? C.green : C.track, border: "none", padding: 0, flexShrink: 0, transition: "background .2s ease" }}>
+            <span style={{ position: "absolute", top: 3, left: reminderOn ? 23 : 3, width: 22, height: 22, borderRadius: "50%", background: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,0.3)", transition: "left .2s ease" }} />
+          </button>
+        </div>
+
+        {sleepLogs.length > 0 && (
+          <div className="mt-4 flex flex-col gap-2">
+            <div className="ft-body px-1" style={{ fontSize: 12, fontWeight: 700, color: C.inkSoft, letterSpacing: 0.5, textTransform: "uppercase" }}>Recent nights</div>
+            {[...sleepLogs].sort((a, b) => b.timestamp - a.timestamp).slice(0, 7).map((s) => (
+              <div key={s.id} className="flex items-center justify-between p-3 rounded-2xl" style={{ background: C.card }}>
+                <span className="ft-body" style={{ fontSize: 13, color: C.inkSoft }}>{fmtDate(s.date)}</span>
+                <span className="ft-mono" style={{ fontSize: 12.5, color: C.ink }}>{fmtTime12(s.bedtime)} → {fmtTime12(s.wakeTime)}</span>
+                <span className="ft-mono" style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{fmtSleepDuration(s.durationMinutes)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
