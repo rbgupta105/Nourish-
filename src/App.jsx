@@ -1712,6 +1712,7 @@ const handleGoogleSignIn = async () => {
   const [waterLogs, setWaterLogs] = useState([]);
   const [sleepLogs, setSleepLogs] = useState([]);
   const [showSleep, setShowSleep] = useState(false);
+  const [showWeight, setShowWeight] = useState(false);
   const [weightAddOpen, setWeightAddOpen] = useState(false);
   const [weightInputHome, setWeightInputHome] = useState("");
   const [splits, setSplits] = useState([]);
@@ -2441,8 +2442,8 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                   <div className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft, lineHeight: 1.35, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{nutritionScore.summary}</div>
                 </div>
 
-                {/* Weight tile */}
-                <div className="p-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+                {/* Weight tile — tap through to the full Weight History screen */}
+                <div onClick={() => setShowWeight(true)} className="p-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", cursor: "pointer" }}>
                   <div className="flex items-center justify-between mb-2.5">
                     <div className="flex items-center gap-2">
                       <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -2451,7 +2452,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                       <span className="ft-display" style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>Weight</span>
                     </div>
                     {latestWeight && (
-                      <button onClick={() => deleteWeightEntry(latestWeight.id)} className="flex items-center justify-center" style={{ width: 22, height: 22, borderRadius: "50%", background: C.bgBottom, border: "none", flexShrink: 0 }}>
+                      <button onClick={(e) => { e.stopPropagation(); deleteWeightEntry(latestWeight.id); }} className="flex items-center justify-center" style={{ width: 22, height: 22, borderRadius: "50%", background: C.bgBottom, border: "none", flexShrink: 0 }}>
                         <Minus size={10} color={C.inkSoft} />
                       </button>
                     )}
@@ -2461,17 +2462,17 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                     <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>kg</span>
                   </div>
                   {weightAddOpen ? (
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
                       <input type="number" inputMode="decimal" autoFocus value={weightInputHome} onChange={(e) => setWeightInputHome(e.target.value)} placeholder="kg"
                         className="ft-mono" style={{ width: "100%", padding: "7px 10px", borderRadius: 12, border: "none", background: C.bgBottom, color: C.ink, fontSize: 13, outline: "none" }} />
                       <button
-                        onClick={() => { const w = num(weightInputHome, null); if (w) { addWeightEntry(w); setWeightInputHome(""); setWeightAddOpen(false); } }}
+                        onClick={(e) => { e.stopPropagation(); const w = num(weightInputHome, null); if (w) { addWeightEntry(w); setWeightInputHome(""); setWeightAddOpen(false); } }}
                         className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: "50%", background: C.orange, flexShrink: 0 }}>
                         <Check size={13} color="#fff" />
                       </button>
                     </div>
                   ) : (
-                    <button onClick={() => setWeightAddOpen(true)} className="ft-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.orange }}>Add Weight</button>
+                    <button onClick={(e) => { e.stopPropagation(); setWeightAddOpen(true); }} className="ft-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.orange }}>Add Weight</button>
                   )}
                 </div>
 
@@ -3044,6 +3045,18 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
           sleepLogs={sleepLogs}
           onSave={(bedtime, wakeTime) => addSleep(bedtime, wakeTime)}
           onClose={() => setShowSleep(false)}
+        />
+      )}
+      {showWeight && (
+        <WeightTrackerScreen
+          weights={weights}
+          weightSeries={weightSeries}
+          goalWeight={goals.targetWeight}
+          weightPace={weightPace}
+          weightProjection={weightProjection}
+          onAdd={(w) => addWeightEntry(w)}
+          onDelete={(id) => deleteWeightEntry(id)}
+          onClose={() => setShowWeight(false)}
         />
       )}
     </div>
@@ -3958,6 +3971,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
   const [local, setLocal] = useState(goals);
   const [saved, setSaved] = useState(false);
   const [goalsEditing, setGoalsEditing] = useState(false);
+  const [goalsSectionOpen, setGoalsSectionOpen] = useState(false);
   const [exerciseSettingsOpen, setExerciseSettingsOpen] = useState(false);
   useEffect(() => setLocal(goals), [goals]);
 
@@ -4026,9 +4040,13 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
       </button>
     </div>
 
+      <button onClick={() => setGoalsSectionOpen((o) => !o)} className="w-full flex items-center justify-between p-4 mb-4" style={{ background: C.card, borderRadius: 16 }}>
+        <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Daily goals</span>
+        <ChevronDown size={16} color={C.inkSoft} style={{ transform: goalsSectionOpen ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
+      </button>
+      {goalsSectionOpen && (
       <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16 }}>
-        <div className="flex items-center justify-between mb-1">
-          <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Daily goals</span>
+        <div className="flex items-center justify-end mb-1">
           <button onClick={toggleGoalsEditing} className="flex items-center gap-1 ft-body" style={{ fontSize: 12, fontWeight: 600, color: goalsEditing ? C.inkSoft : C.orange }}>
             {goalsEditing ? "Cancel" : <><Pencil size={12} /> Edit goals</>}
           </button>
@@ -4080,24 +4098,9 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
           </div>
         )}
       </div>
-
-      <div className="flex items-center justify-between mb-3">
-        <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Weight</span>
-        <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>Add new entries from Home</span>
-      </div>
-      {weights.length === 0 ? <EmptyState text="No weight entries yet." /> : (
-        <div className="flex flex-col gap-2">
-          {[...weights].sort((a, b) => b.timestamp - a.timestamp).map((w) => (
-            <div key={w.id} className="flex items-center justify-between p-3 rounded-2xl" style={{ background: C.card }}>
-              <span className="ft-body" style={{ fontSize: 13, color: C.inkSoft }}>{fmtDate(w.date)}</span>
-              <span className="ft-mono" style={{ fontSize: 15, fontWeight: 600, color: C.ink }}>{w.weight}</span>
-              <button onClick={() => onDeleteWeight(w.id)} className="p-1.5"><Trash2 size={14} color={C.pink} /></button>
-            </div>
-          ))}
-        </div>
       )}
 
-      <button onClick={() => setExerciseSettingsOpen((o) => !o)} className="w-full flex items-center justify-between p-4 mt-6" style={{ background: C.card, borderRadius: 16 }}>
+      <button onClick={() => setExerciseSettingsOpen((o) => !o)} className="w-full flex items-center justify-between p-4 mb-4" style={{ background: C.card, borderRadius: 16 }}>
         <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, letterSpacing: 0.5, textTransform: "uppercase" }}>Exercise settings</span>
         <ChevronDown size={16} color={C.inkSoft} style={{ transform: exerciseSettingsOpen ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
       </button>
@@ -4239,12 +4242,105 @@ function SleepTrackerScreen({ sleepLogs, onSave, onClose }) {
 
         {sleepLogs.length > 0 && (
           <div className="mt-4 flex flex-col gap-2">
-            <div className="ft-body px-1" style={{ fontSize: 12, fontWeight: 700, color: C.inkSoft, letterSpacing: 0.5, textTransform: "uppercase" }}>Recent nights</div>
-            {[...sleepLogs].sort((a, b) => b.timestamp - a.timestamp).slice(0, 7).map((s) => (
+            <div className="ft-body px-1" style={{ fontSize: 12, fontWeight: 700, color: C.inkSoft, letterSpacing: 0.5, textTransform: "uppercase" }}>Sleep history</div>
+            {[...sleepLogs].sort((a, b) => b.timestamp - a.timestamp).map((s) => (
               <div key={s.id} className="flex items-center justify-between p-3 rounded-2xl" style={{ background: C.card }}>
                 <span className="ft-body" style={{ fontSize: 13, color: C.inkSoft }}>{fmtDate(s.date)}</span>
                 <span className="ft-mono" style={{ fontSize: 12.5, color: C.ink }}>{fmtTime12(s.bedtime)} → {fmtTime12(s.wakeTime)}</span>
                 <span className="ft-mono" style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{fmtSleepDuration(s.durationMinutes)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Weight Tracker ----------
+// Full-screen page opened from the Home "Weight" card — mirrors the Sleep
+// Tracker's pattern (back button, quick entry, full history list). Shows a
+// trend line (reusing the same weightSeries/weightPace/weightProjection data
+// already computed on Home/Insights) plus every logged weigh-in with delete.
+function WeightTrackerScreen({ weights, weightSeries, goalWeight, weightPace, weightProjection, onAdd, onClose, onDelete }) {
+  const [inputVal, setInputVal] = useState("");
+  const latest = weights.length ? [...weights].sort((a, b) => b.timestamp - a.timestamp)[0] : null;
+
+  function submit() {
+    const w = num(inputVal, null);
+    if (!w) return;
+    onAdd(w);
+    setInputVal("");
+  }
+
+  return (
+    <div className="absolute inset-0 flex flex-col" style={{ background: `linear-gradient(180deg, ${C.bgTop} 0%, ${C.bgBottom} 100%)`, zIndex: 50 }}>
+      <div className="flex items-center px-4" style={{ paddingTop: "calc(16px + env(safe-area-inset-top, 0px))", paddingBottom: 12 }}>
+        <button onClick={onClose} className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: "50%", background: C.card, border: "none" }}>
+          <ChevronLeft size={17} color={C.ink} />
+        </button>
+        <span className="ft-display flex-1 text-center" style={{ fontSize: 17, fontWeight: 700, color: C.ink, marginRight: 34 }}>Weight Tracker</span>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4" style={{ paddingBottom: 32 }}>
+        <div className="p-5 mb-4" style={{ background: C.card, borderRadius: 24, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+          <div className="flex items-end justify-between mb-4">
+            <div className="flex items-baseline gap-1.5">
+              <span className="ft-display" style={{ fontSize: 34, fontWeight: 700, color: C.ink }}>{latest ? latest.weight : "0.0"}</span>
+              <span className="ft-body" style={{ fontSize: 14, color: C.inkSoft, fontWeight: 600 }}>kg</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <input type="number" inputMode="decimal" value={inputVal} onChange={(e) => setInputVal(e.target.value)} placeholder="Add kg"
+                onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+                className="ft-mono text-right" style={{ width: 74, padding: "9px 10px", borderRadius: 12, border: "none", background: C.bgBottom, color: C.ink, fontSize: 14, outline: "none" }} />
+              <button onClick={submit} className="flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: "50%", background: C.orange, flexShrink: 0, border: "none" }}>
+                <Plus size={16} color="#fff" />
+              </button>
+            </div>
+          </div>
+
+          {weightSeries.length === 0 ? (
+            <EmptyState icon={Scale} text="Log a weigh-in to start tracking your trend." compact />
+          ) : (
+            <>
+              <ResponsiveContainer width="100%" height={150}>
+                <LineChart data={weightSeries}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} />
+                  <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={34} domain={["dataMin - 2", "dataMax + 2"]} />
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
+                  {goalWeight > 0 && (
+                    <ReferenceLine y={goalWeight} stroke={C.green} strokeDasharray="4 4" strokeWidth={1.5}
+                      label={{ value: "Goal", position: "insideTopRight", fill: C.green, fontSize: 12 }} />
+                  )}
+                  <Line type="monotone" dataKey="weight" stroke={C.orange} strokeWidth={2} dot={{ r: 3 }} />
+                </LineChart>
+              </ResponsiveContainer>
+              <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
+                {!weightPace ? (
+                  <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Log at least 2 weigh-ins to see a pace projection.</span>
+                ) : !goalWeight ? (
+                  <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Currently {weightPace.paceKgPerWeek > 0 ? "gaining" : weightPace.paceKgPerWeek < 0 ? "losing" : "holding steady at"} {Math.abs(weightPace.paceKgPerWeek).toFixed(2)}/week. Set a goal weight in Profile to see a projection.</span>
+                ) : !weightProjection ? (
+                  <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Weight has been stable — no clear pace to project from yet.</span>
+                ) : weightProjection.onTrack ? (
+                  <span className="ft-body" style={{ fontSize: 12.5, color: C.green, fontWeight: 600 }}>On pace ({weightPace.paceKgPerWeek > 0 ? "+" : ""}{weightPace.paceKgPerWeek.toFixed(2)}/week) to reach your goal in ~{weightProjection.weeks} weeks.</span>
+                ) : (
+                  <span className="ft-body" style={{ fontSize: 12.5, color: C.pink, fontWeight: 600 }}>Current pace ({weightPace.paceKgPerWeek > 0 ? "+" : ""}{weightPace.paceKgPerWeek.toFixed(2)}/week) is moving away from your goal.</span>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
+        {weights.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <div className="ft-body px-1" style={{ fontSize: 12, fontWeight: 700, color: C.inkSoft, letterSpacing: 0.5, textTransform: "uppercase" }}>Weight history</div>
+            {[...weights].sort((a, b) => b.timestamp - a.timestamp).map((w) => (
+              <div key={w.id} className="flex items-center justify-between p-3 rounded-2xl" style={{ background: C.card }}>
+                <span className="ft-body" style={{ fontSize: 13, color: C.inkSoft }}>{fmtDate(w.date)}</span>
+                <span className="ft-mono" style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>{w.weight} kg</span>
+                <button onClick={() => onDelete(w.id)} className="p-1.5"><Trash2 size={14} color={C.pink} /></button>
               </div>
             ))}
           </div>
