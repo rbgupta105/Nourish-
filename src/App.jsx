@@ -276,6 +276,19 @@ function generateInsights(logs, exerciseLogs, goals) {
     });
   }
 
+  // 4) Eating-timing pattern: what share of calories land after 8pm
+  const totalRecentCals = recentLogs.reduce((s, l) => s + num(l.calories), 0);
+  if (totalRecentCals > 0 && recentLogs.length >= 5) {
+    const lateCals = recentLogs.filter((l) => new Date(l.timestamp).getHours() >= 20).reduce((s, l) => s + num(l.calories), 0);
+    const latePct = Math.round((lateCals / totalRecentCals) * 100);
+    if (latePct >= 25) {
+      insights.push({
+        icon: Moon, color: C.purple, bg: C.purpleTint,
+        text: `${latePct}% of your calories come in after 8pm, based on your last ${new Set(recentLogs.map((l) => l.date)).size} logged days.`,
+      });
+    }
+  }
+
   return insights;
 }
 
@@ -2030,6 +2043,7 @@ const handleGoogleSignIn = async () => {
   const weightPace = useMemo(() => computeWeightPace(weights), [weights]);
   const weightProjection = useMemo(() => weightPace ? projectWeeksToGoal(weightPace.currentWeight, goals.targetWeight, weightPace.paceKgPerWeek) : null, [weightPace, goals.targetWeight]);
   const insights = useMemo(() => generateInsights(logs, exerciseLogs, goals), [logs, exerciseLogs, goals, darkMode]);
+  const weeklyDeltaStats = useMemo(() => computeWeeklyReviewStats(logs, exerciseLogs, waterLogs, weights, goals), [logs, exerciseLogs, waterLogs, weights, goals]);
   const weeklyConsistency = useMemo(() => computeWeeklyConsistency(logs, goals, 7), [logs, goals]);
   const periodSummary = useMemo(() => computePeriodSummary(logs, chartsPeriod === "week" ? 7 : 30), [logs, chartsPeriod]);
   const todayWater = useMemo(() => waterLogs.filter((w) => w.date === todayStr()).reduce((s, w) => s + num(w.ml), 0), [waterLogs]);
@@ -2802,6 +2816,26 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
         {tab === "charts" && (
           <div>
             <WeeklyConsistencyRow days={weeklyConsistency} />
+
+            {(weeklyDeltaStats.proteinChangePct != null || weeklyDeltaStats.calorieChangePct != null) && (
+              <div className="flex items-center gap-3 p-3 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)", flexWrap: "wrap" }}>
+                <span className="ft-body" style={{ fontSize: 11, fontWeight: 700, color: C.inkSoft, letterSpacing: 0.4, textTransform: "uppercase", flexShrink: 0 }}>vs last week</span>
+                <div className="flex items-center gap-3 flex-wrap">
+                  {weeklyDeltaStats.proteinChangePct != null && (
+                    <div className="flex items-center gap-1">
+                      <TrendArrow trend={weeklyDeltaStats.proteinChangePct > 0 ? "up" : weeklyDeltaStats.proteinChangePct < 0 ? "down" : "flat"} size={12} />
+                      <span className="ft-mono" style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>Protein {weeklyDeltaStats.proteinChangePct > 0 ? "+" : ""}{weeklyDeltaStats.proteinChangePct}%</span>
+                    </div>
+                  )}
+                  {weeklyDeltaStats.calorieChangePct != null && (
+                    <div className="flex items-center gap-1">
+                      <TrendArrow trend={weeklyDeltaStats.calorieChangePct > 0 ? "up" : weeklyDeltaStats.calorieChangePct < 0 ? "down" : "flat"} size={12} />
+                      <span className="ft-mono" style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>Calories {weeklyDeltaStats.calorieChangePct > 0 ? "+" : ""}{weeklyDeltaStats.calorieChangePct}%</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {insights.length > 0 && (
               <div className="flex flex-col gap-2 mb-4">
