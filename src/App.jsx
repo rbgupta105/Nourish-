@@ -185,6 +185,44 @@ function fmtTime12(hhmm) {
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${String(m).padStart(2, "0")} ${period}`;
 }
+// Fallback sleep-goal target (minutes) used only if the user hasn't set
+// their own value in Profile > Daily goals (goals.sleep) — same role as the
+// hardcoded fallbacks already used for fiber/water elsewhere.
+const SLEEP_GOAL_MINUTES = 480;
+// Simple, deterministic thresholds (not an AI judgment) driving the calm
+// "good sleep glow" / "poor sleep" cues — relative to the user's own sleep
+// goal (falling back to the 8h default) rather than a fixed assumption:
+// within 30min of goal or more reads as good, more than 2h short reads as
+// poor, anything between is neutral.
+function sleepQuality(mins, goalMinutes = SLEEP_GOAL_MINUTES) {
+  if (!mins || mins <= 0) return "none";
+  if (mins >= goalMinutes - 30) return "good";
+  if (mins < goalMinutes - 120) return "poor";
+  return "ok";
+}
+// Eases a sleep duration (in minutes) up from 0 once on mount, formatted the
+// same way as the rest of the app (fmtSleepDuration) — used for the Home
+// tile's "counts up" moment. Deliberately self-contained (not reused inside
+// the interactive SleepDial) since that number needs to track live drag
+// input instantly rather than animate on every small change.
+function SleepDurationCountUp({ minutes, duration = 800 }) {
+  const [display, setDisplay] = useState(0);
+  const fromRef = useRef(0);
+  useEffect(() => {
+    const from = fromRef.current, to = minutes;
+    let raf; const start = performance.now();
+    function tick(now) {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setDisplay(from + (to - from) * eased);
+      if (t < 1) raf = requestAnimationFrame(tick);
+      else fromRef.current = to;
+    }
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [minutes, duration]);
+  return <>{fmtSleepDuration(Math.round(display))}</>;
+}
 
 // ---------- Weight pace projection ----------
 // Least-squares slope (kg/day) over the most recent entries (last 42 days, or all
@@ -377,7 +415,7 @@ function computeNutritionScore({ todayTotals, todayLogs, goals, waterMl }) {
     ? `${praise[best[0]]} You're on track across the board.`
     : `${praise[best[0]]} ${fixes[worst[0]]()}`;
 
-  return { total, summary, breakdown: weighted };
+  return { total, summary, breakdown: weighted, bestKey: best[0], worstKey: worst[0] };
 }
 
 // ---------- Micronutrient tracking ----------
@@ -1247,6 +1285,8 @@ function MicroInteractionStyles() {
       .anim-celebrate { animation: celebrateSlideIn .35s cubic-bezier(.22,.9,.34,1); }
       .anim-pop { animation: celebratePop .4s cubic-bezier(.22,.9,.34,1); }
       .anim-row-flash { animation: rowHighlight 1.1s ease-out; }
+      @keyframes rowSlideIn { 0% { transform: translateY(-14px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }
+      .anim-row-slide-in { animation: rowSlideIn .38s cubic-bezier(.22,.9,.34,1); }
       .anim-check-pop { animation: checkPop .45s cubic-bezier(.22,.9,.34,1); }
       .fab-pill { transition: transform .5s cubic-bezier(.34,1.56,.64,1), box-shadow .3s ease; }
       @keyframes fabBreathe { 0%, 100% { transform: translateX(-50%) scale(1); } 50% { transform: translateX(-50%) scale(1.06); } }
@@ -1258,13 +1298,22 @@ function MicroInteractionStyles() {
 
 // Small centered icon "pop" used for lighter confirmations (meal logged, weight
 // updated, workout completed) — brief and unobtrusive, auto-dismisses itself.
+// A small checkmark badge pops in a beat after the main icon, so the moment
+// reads as a confirmed success rather than just an icon flashing on screen.
 function MicroPulse({ pulse }) {
   if (!pulse) return null;
   const Icon = pulse.icon;
   return (
     <div className="absolute inset-0 flex items-center justify-center pointer-events-none" style={{ zIndex: 60 }}>
-      <div className="anim-pop flex items-center justify-center" style={{ width: 64, height: 64, borderRadius: "50%", background: pulse.bg, boxShadow: "0 8px 24px rgba(20,20,20,0.18)" }}>
+      <div className="anim-pop flex items-center justify-center" style={{ width: 64, height: 64, borderRadius: "50%", background: pulse.bg, boxShadow: "0 8px 24px rgba(20,20,20,0.18)", position: "relative" }}>
         <Icon size={28} color={pulse.color} />
+        <div className="anim-check-pop flex items-center justify-center" style={{
+          position: "absolute", right: -3, bottom: -3, width: 24, height: 24, borderRadius: "50%",
+          background: C.green, border: `2px solid ${C.bgBottom}`,
+          animationDelay: ".18s", animationFillMode: "backwards",
+        }}>
+          <Check size={12} color="#fff" strokeWidth={3} />
+        </div>
       </div>
     </div>
   );
@@ -1383,8 +1432,245 @@ function PortionBadge({ verdict, percent }) {
   );
 }
 
+// Animates a number counting up from 0 to `value` over `duration` ms, but
+// only while `active` is true (used for the brief "numbers landing" moment
+// right after an AI meal analysis completes). When inactive it just renders
+// `value` directly with no animation, so it's safe to reuse anywhere.
+function CountUp({ value, active, duration = 700, decimals = 0 }) {
+  const [display, setDisplay] = useState(active ? 0 : value);
+  useEffect(() => {
+    if (!active) { setDisplay(value); return; }
+    let raf; const start = performance.now();
+    function tick(now) {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      setDisplay(value * eased);
+      if (t < 1) raf = requestAnimationFrame(tick);
+    }
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [active, value, duration]);
+  return <>{decimals > 0 ? display.toFixed(decimals) : Math.round(display)}</>;
+}
+
+const MEAL_ANALYZE_STAGES = [
+  { title: "Identifying foods", subtitle: "Looking at what's on the plate" },
+  { title: "Estimating portions", subtitle: "Judging size and depth" },
+  { title: "Calculating nutrition", subtitle: "Crunching calories and macros" },
+  { title: "Checking your goals", subtitle: "Comparing with today's intake" },
+];
+
+// Signature "AI is thinking" moment for meal analysis — replaces a plain
+// spinner with the food photo itself (swept by an animated scan line) plus
+// a step checklist that fills in as it goes, so the wait reads as active
+// work rather than a stalled loader. Purely time-based staging, not tied to
+// real Gemini progress (the API call doesn't report intermediate steps) —
+// it advances every ~1.3s and holds on the last step until the real result
+// (or an error) arrives and this component unmounts.
+function MealAnalyzingCard({ imagePreview }) {
+  const [stage, setStage] = useState(0);
+  useEffect(() => {
+    setStage(0);
+    const id = setInterval(() => setStage((s) => Math.min(s + 1, MEAL_ANALYZE_STAGES.length - 1)), 1300);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <div className="mt-3 p-4 anim-meal-scale-in" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+      <style>{`
+        @keyframes mealScaleIn { 0% { opacity: 0; transform: scale(0.93); } 100% { opacity: 1; transform: scale(1); } }
+        .anim-meal-scale-in { animation: mealScaleIn 0.35s ease both; }
+        @keyframes mealScanLine { 0% { top: 6%; opacity: 0; } 12% { opacity: 1; } 88% { opacity: 1; } 100% { top: 92%; opacity: 0; } }
+        .meal-scan-line { animation: mealScanLine 2.1s ease-in-out infinite; }
+        @keyframes mealIconSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .meal-icon-spin { animation: mealIconSpin 1.1s linear infinite; }
+        @keyframes mealStepIn { 0% { opacity: 0; transform: translateX(-6px); } 100% { opacity: 1; transform: translateX(0); } }
+        .meal-step-in { animation: mealStepIn 0.3s ease both; }
+      `}</style>
+      {imagePreview && (
+        <div className="relative mb-4" style={{ borderRadius: 16, overflow: "hidden", height: 150 }}>
+          <img src={`data:${imagePreview.mediaType};base64,${imagePreview.b64}`} alt="Analyzing meal" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", filter: "brightness(0.85)" }} />
+          <div className="meal-scan-line" style={{ position: "absolute", left: 0, right: 0, height: 2, background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.95), transparent)", boxShadow: `0 0 10px 2px ${C.orange}` }} />
+          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, rgba(0,0,0,0.05), rgba(0,0,0,0.25))" }} />
+        </div>
+      )}
+      <div className="flex flex-col">
+        {MEAL_ANALYZE_STAGES.map((st, i) => {
+          const done = i < stage, active = i === stage;
+          return (
+            <div key={i} className="flex items-start gap-3" style={{ paddingBottom: i < MEAL_ANALYZE_STAGES.length - 1 ? 18 : 0 }}>
+              <div className="flex flex-col items-center flex-shrink-0">
+                <div className="flex items-center justify-center flex-shrink-0" style={{
+                  width: 26, height: 26, borderRadius: "50%",
+                  background: done ? C.greenTint : active ? C.orangeTint : C.track,
+                  transition: "background .3s ease",
+                }}>
+                  {done ? <Check size={14} color={C.green} /> : active ? (
+                    <div className="meal-icon-spin" style={{ width: 12, height: 12, borderRadius: "50%", border: `2px solid ${C.orange}`, borderTopColor: "transparent" }} />
+                  ) : (
+                    <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.inkSoft, opacity: 0.4 }} />
+                  )}
+                </div>
+                {i < MEAL_ANALYZE_STAGES.length - 1 && (
+                  <div style={{ width: 2, flex: 1, minHeight: 18, background: done ? C.greenTint : C.track, transition: "background .3s ease" }} />
+                )}
+              </div>
+              <div className={active || done ? "meal-step-in" : ""} style={{ paddingTop: 2, opacity: done || active ? 1 : 0.45 }}>
+                <div className="ft-body" style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{st.title}</div>
+                <div className="ft-body mt-0.5" style={{ fontSize: 11.5, color: C.inkSoft }}>{st.subtitle}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex items-center gap-2 mt-4 p-2.5" style={{ background: C.orangeTint, borderRadius: 12 }}>
+        <Sparkles size={14} color={C.orange} className="meal-icon-spin" style={{ animationDuration: "2.4s" }} />
+        <span className="ft-body" style={{ fontSize: 11.5, color: C.orangeDeep, fontWeight: 600 }}>AI in action — this usually takes 5–10 seconds</span>
+      </div>
+    </div>
+  );
+}
+
 // Skeleton placeholder mirroring the NutritionLabel's shape while the AI call is
 // in flight, so the layout doesn't jump once real data lands.
+// A short, deterministic descriptor of the meal's macro balance — computed
+// client-side from the numbers Gemini already returned (protein-to-calorie
+// ratio, fiber grams), not a separate AI judgment call. Mirrors the "Meal
+// Quality" line in the reference design without inventing new AI output.
+function mealQualityBlurb(m) {
+  const proteinCalPct = m.calories > 0 ? ((m.protein_g * 4) / m.calories) * 100 : 0;
+  const goodFiber = m.fiber_g >= 5;
+  if (proteinCalPct >= 25 && goodFiber) return { label: "Great balance", detail: "High in protein and good balance of carbs and fats." };
+  if (proteinCalPct >= 25) return { label: "High protein", detail: "Strong protein content for this meal." };
+  if (goodFiber) return { label: "Good fiber", detail: "Solid fiber content to help keep you full." };
+  return { label: "Logged", detail: "Estimate saved — check the full breakdown below." };
+}
+
+// "Analysis Complete" summary — the landing view right after a fresh AI
+// result, mirroring the reference design's overview screen: total calories
+// + confidence, a macro row, a quality blurb, and three "contributes to
+// today's goal" rings. Deliberately NOT shown for manual/barcode entries or
+// when reopening an already-saved meal — only for a result that just came
+// back from analyze().
+function MealCompleteSummary({ pending, goals, justAnalyzed, onViewDetails }) {
+  const quality = mealQualityBlurb(pending);
+  const calPct = goals.calories > 0 ? clamp((pending.calories / goals.calories) * 100, 0, 100) : 0;
+  const proPct = goals.protein > 0 ? clamp((pending.protein_g / goals.protein) * 100, 0, 100) : 0;
+  const fiberGoalVal = goals.fiber || 28;
+  const fibPct = clamp((pending.fiber_g / fiberGoalVal) * 100, 0, 100);
+  return (
+    <div className="anim-result-fade-in">
+      <div className="flex items-center gap-1.5 mb-0.5">
+        <Sparkles size={15} color={C.orange} />
+        <span className="ft-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>Analysis Complete</span>
+      </div>
+      <div className="ft-body mb-3" style={{ fontSize: 12.5, color: C.inkSoft }}>Here's what I found</div>
+
+      <div className="flex items-center justify-between p-3.5 mb-3" style={{ background: C.card, borderRadius: 16, border: `1px solid ${C.line}` }}>
+        <div>
+          <div className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft, fontWeight: 600 }}>Total</div>
+          <div className="ft-display" style={{ fontSize: 30, fontWeight: 800, color: C.ink }}>
+            <CountUp value={Math.round(pending.calories)} active={justAnalyzed} /> <span style={{ fontSize: 15, fontWeight: 600, color: C.inkSoft }}>kcal</span>
+          </div>
+        </div>
+        {pending.confidence && <ConfidenceBadge level={pending.confidence} />}
+      </div>
+
+      <div className="flex gap-2 mb-3">
+        {[["Protein", pending.protein_g, "g"], ["Carbs", pending.carbs_g, "g"], ["Fats", pending.fat_g, "g"], ["Fiber", pending.fiber_g, "g"]].map(([label, val, unit]) => (
+          <div key={label} className="flex-1 flex flex-col items-center py-2 rounded-xl" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <span className="ft-mono" style={{ fontSize: 15, fontWeight: 700, color: C.ink }}><CountUp value={Math.round(val)} active={justAnalyzed} />{unit}</span>
+            <span className="ft-body" style={{ fontSize: 10.5, color: C.inkSoft }}>{label}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="p-3 mb-3" style={{ background: C.card, borderRadius: 16, border: `1px solid ${C.line}` }}>
+        <div className="flex items-center justify-between mb-1">
+          <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>Meal Quality</span>
+          <span className="ft-body px-2 py-0.5" style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenTint, borderRadius: 999 }}>{quality.label}</span>
+        </div>
+        <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4 }}>{quality.detail}</span>
+      </div>
+
+      <div className="mb-1">
+        <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>This meal contributes</span>
+      </div>
+      <div className="flex gap-2 mb-4">
+        {[
+          { label: "Calories", pct: calPct, sub: `/ ${Math.round(goals.calories)} kcal`, color: C.orange, bg: C.orangeTint },
+          { label: "Protein", pct: proPct, sub: `/ ${Math.round(goals.protein)}g`, color: C.green, bg: C.greenTint },
+          { label: "Fiber", pct: fibPct, sub: `/ ${Math.round(fiberGoalVal)}g`, color: C.tan, bg: C.tanTint },
+        ].map((r) => (
+          <div key={r.label} className="flex-1 flex flex-col items-center py-2.5 rounded-xl" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <Ring size={44} stroke={4} pct={r.pct} trackColor={r.bg} fillColor={r.color}>
+              <span className="ft-mono" style={{ fontSize: 11.5, fontWeight: 700, color: C.ink }}>{Math.round(r.pct)}%</span>
+            </Ring>
+            <span className="ft-body mt-1.5" style={{ fontSize: 10.5, fontWeight: 600, color: C.ink }}>{r.label}</span>
+            <span className="ft-body" style={{ fontSize: 9.5, color: C.inkSoft }}>{r.sub}</span>
+          </div>
+        ))}
+      </div>
+
+      <button onClick={onViewDetails} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.orange, color: "#fff", fontSize: 14, fontWeight: 600 }}>
+        View Details <ChevronRight size={16} />
+      </button>
+    </div>
+  );
+}
+
+// Portion Advice — a verdict-colored scored banner plus a short list of
+// suggestions, matching the reference design's dedicated portion-advice
+// screen. The "fit" score is a simple client-side computation from
+// portion_change_percent (not a separate AI call) — labeled "Portion fit"
+// rather than claiming AI precision it doesn't have. Suggestions are built
+// entirely from data already on the meal (the AI's own portion_guidance,
+// plus a protein check against today's goal) except for one static,
+// always-true hydration reminder.
+function PortionAdviceCard({ pending, justAnalyzed, goals }) {
+  const verdict = pending.portion_verdict || "keep";
+  const bannerMap = {
+    keep: { title: "Good portion!", color: C.green, bg: C.greenTint },
+    increase: { title: "Consider a larger portion", color: C.tan, bg: C.tanTint },
+    decrease: { title: "Consider a smaller portion", color: C.pink, bg: C.pinkTint },
+  };
+  const banner = bannerMap[verdict] || bannerMap.keep;
+  const fitScore = clamp(100 - Math.abs(num(pending.portion_change_percent)) * 2, 40, 100);
+  const proteinGood = goals.protein > 0 && pending.protein_g >= goals.protein / 3;
+
+  const suggestions = [
+    pending.portion_guidance && { icon: <GuidanceIcon text={pending.portion_guidance} />, title: "Portion size", detail: pending.portion_guidance },
+    proteinGood
+      ? { icon: <Dumbbell size={16} color={C.green} />, title: "Protein is great", detail: "Strong protein contribution for this meal." }
+      : { icon: <Dumbbell size={16} color={C.tan} />, title: "Protein", detail: "Consider adding a protein source to this meal." },
+    { icon: <Droplet size={16} color={C.blue} />, title: "Hydration tip", detail: "Drink a glass of water with this meal." },
+  ].filter(Boolean);
+
+  return (
+    <div className={justAnalyzed ? "anim-result-slide-up mb-3" : "mb-3"}>
+      <div className="flex items-center gap-3 p-3 rounded-2xl mb-2" style={{ background: banner.bg }}>
+        <Ring size={40} stroke={3.5} pct={fitScore} trackColor="rgba(255,255,255,0.5)" fillColor={banner.color}>
+          <span className="ft-mono" style={{ fontSize: 11, fontWeight: 700, color: banner.color }}>{Math.round(fitScore)}</span>
+        </Ring>
+        <div className="flex-1">
+          <span className="ft-body" style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{banner.title}</span>
+          <div className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>Portion fit score</div>
+        </div>
+      </div>
+      <div className="flex flex-col gap-2">
+        {suggestions.map((s, i) => (
+          <div key={i} className="flex items-start gap-2.5 p-2.5 rounded-xl" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div style={{ marginTop: 1, flexShrink: 0 }}>{s.icon}</div>
+            <div className="flex-1">
+              <div className="ft-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{s.title}</div>
+              <div className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft, lineHeight: 1.35 }}>{s.detail}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function NutritionSkeleton() {
   const bar = (w, h = 12) => <div style={{ width: w, height: h, borderRadius: 6, background: C.track, opacity: 0.7 }} className="skeleton-pulse" />;
   return (
@@ -1466,12 +1752,71 @@ function WaterWaveCard({ todayWater, goalMl, onAdd, onRemove, compact, animation
   const fillPct = Math.max(pct, todayWater > 0 ? 6 : 0);
   const waveHeight = compact ? 90 : 130;
   const lightOnFill = pct > (compact ? 45 : 38); // once the wave covers most of the number, switch it to a light color for contrast
+
+
+  // Signature "add water" animation: every time todayWater increases (a +250ml
+  // tap), spawn a droplet that falls from the top of the card into the
+  // glass, plus a small ripple at the water surface timed to when it lands.
+  // Both are tracked by a shared id so they can be cleaned out of state
+  // together once their CSS animations finish.
+  const [drops, setDrops] = useState([]);
+  const prevWaterRef = useRef(todayWater);
+  useEffect(() => {
+    if (todayWater > prevWaterRef.current) {
+      const dropId = uid();
+      setDrops((d) => [...d, dropId]);
+      setTimeout(() => setDrops((d) => d.filter((id) => id !== dropId)), 950);
+    }
+    prevWaterRef.current = todayWater;
+  }, [todayWater]);
+
+  // Goal-achieved shine/pulse: fires once at the moment todayWater first
+  // reaches goalMl (not on every render while at/above goal), then clears
+  // itself so the card returns to its normal resting state.
+  const [justAchieved, setJustAchieved] = useState(false);
+  const wasAtGoalRef = useRef(goalMl > 0 && todayWater >= goalMl);
+  useEffect(() => {
+    const atGoal = goalMl > 0 && todayWater >= goalMl;
+    if (atGoal && !wasAtGoalRef.current) {
+      setJustAchieved(true);
+      const t = setTimeout(() => setJustAchieved(false), 1300);
+      wasAtGoalRef.current = true;
+      return () => clearTimeout(t);
+    }
+    if (!atGoal) wasAtGoalRef.current = false;
+  }, [todayWater, goalMl]);
+
   return (
     <div className={`${compact ? "" : "mb-4"}${animationDelay ? " anim-card-in" : ""}`} style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", overflow: "hidden", height: compact ? "100%" : undefined, animationDelay }}>
       <style>{`
         @keyframes waterWaveScroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
         .water-wave-back { animation: waterWaveScroll 9s linear infinite; }
         .water-wave-front { animation: waterWaveScroll 6s linear infinite reverse; }
+        @keyframes waterDropFall {
+          0% { transform: translateY(-16px) scale(0.5); opacity: 0; }
+          18% { opacity: 1; transform: translateY(0px) scale(1); }
+          78% { opacity: 1; }
+          100% { transform: translateY(${waveHeight - 6}px) scale(0.5); opacity: 0; }
+        }
+        .water-drop-fall { animation: waterDropFall 0.6s cubic-bezier(.55,0,.85,.35) forwards; }
+        @keyframes waterRippleSurface {
+          0% { transform: scaleX(0.3); opacity: 0; }
+          35% { opacity: 0.85; }
+          100% { transform: scaleX(2.4); opacity: 0; }
+        }
+        .water-ripple { border-radius: 50%; border: 2px solid rgba(255,255,255,0.75); animation: waterRippleSurface 0.55s ease-out forwards; animation-delay: 0.38s; }
+        @keyframes waterGoalPulse {
+          0% { box-shadow: inset 0 0 0 0 rgba(255,255,255,0); }
+          30% { box-shadow: inset 0 0 26px 8px rgba(255,255,255,0.5); }
+          100% { box-shadow: inset 0 0 0 0 rgba(255,255,255,0); }
+        }
+        .water-goal-pulse { animation: waterGoalPulse 1.1s ease; }
+        @keyframes waterGoalShine {
+          0% { opacity: 0; left: -60%; }
+          45% { opacity: 0.6; }
+          100% { opacity: 0; left: 60%; }
+        }
+        .water-goal-shine-overlay { animation: waterGoalShine 1.3s ease; }
       `}</style>
       <div className={compact ? "flex items-center justify-between p-4 pb-2" : "flex items-center justify-between p-4 pb-3"}>
         <div className="flex items-center gap-2">
@@ -1485,16 +1830,42 @@ function WaterWaveCard({ todayWater, goalMl, onAdd, onRemove, compact, animation
           <button onClick={onAdd} className="flex items-center justify-center" style={{ width: compact ? 22 : 30, height: compact ? 22 : 30, borderRadius: "50%", background: C.blueTint, border: "none", flexShrink: 0 }}><Plus size={compact ? 10 : 14} color={C.blue} /></button>
         </div>
       </div>
-      <div style={{ position: "relative", height: waveHeight, overflow: "hidden" }}>
-        <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: `${fillPct}%`, transition: "height .6s ease", overflow: "hidden" }}>
-          <svg className="water-wave-back" viewBox="0 0 400 40" preserveAspectRatio="none" style={{ position: "absolute", top: -16, left: 0, width: "200%", height: 24, display: "block" }}>
-            <path d="M0 20 Q 50 5 100 20 T 200 20 T 300 20 T 400 20 V40 H0 Z" fill={C.blue} opacity="0.45" />
-          </svg>
-          <svg className="water-wave-front" viewBox="0 0 400 40" preserveAspectRatio="none" style={{ position: "absolute", top: -10, left: 0, width: "200%", height: 22, display: "block" }}>
-            <path d="M0 20 Q 50 32 100 20 T 200 20 T 300 20 T 400 20 V40 H0 Z" fill={C.blue} opacity="0.75" />
-          </svg>
-          <div style={{ position: "absolute", left: 0, right: 0, top: 8, bottom: 0, background: C.blue }} />
+      <div className={justAchieved ? "water-goal-pulse" : ""} style={{ position: "relative", height: waveHeight, overflow: "hidden" }}>
+        <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: `${fillPct}%`, background: C.blue, transition: "height .6s ease" }}>
+          {/* Landing ripple(s) — one per drop, anchored to the water surface
+              (the top edge of this fill div), so it tracks the rising level
+              automatically without any extra position math. */}
+          {drops.map((id) => (
+            <div key={id} className="water-ripple" style={{ position: "absolute", top: -7, left: "50%", width: compact ? 22 : 28, height: compact ? 10 : 13, marginLeft: compact ? -11 : -14, zIndex: 3, pointerEvents: "none" }} />
+          ))}
         </div>
+        {/* Wavy top surface — rides exactly at the fill boundary (bottom:
+            fillPct%, so it tracks the rising level automatically) and
+            scrolls sideways continuously for a "living water" feel. A solid
+            base wave (matching the fill color exactly, so its crests blend
+            seamlessly into the flat rectangle below) plus a faint lighter
+            wave on top for depth. Purely horizontal-scrolling — no rotation
+            anywhere — so this can't sweep into the diagonal glare artifact
+            the tilt-based version had. */}
+        <div style={{ position: "absolute", left: 0, right: 0, bottom: `${fillPct}%`, height: 0, transition: "bottom .6s ease", pointerEvents: "none" }}>
+          <svg className="water-wave-back" viewBox="0 0 400 20" preserveAspectRatio="none" style={{ position: "absolute", left: "-50%", bottom: -7, width: "300%", height: 16, display: "block" }}>
+            <path d="M0 11 Q 50 3 100 11 T 200 11 T 300 11 T 400 11 V20 H0 Z" fill={C.blue} />
+          </svg>
+          <svg className="water-wave-front" viewBox="0 0 400 20" preserveAspectRatio="none" style={{ position: "absolute", left: "-50%", bottom: -9, width: "300%", height: 14, display: "block" }}>
+            <path d="M0 11 Q 50 19 100 11 T 200 11 T 300 11 T 400 11 V20 H0 Z" fill="#fff" opacity="0.16" />
+          </svg>
+        </div>
+        {/* Falling drops — one spawned per +250ml tap, dropping from the top
+            of the card down into the glass/bottle. */}
+        {drops.map((id) => (
+          <Droplets key={id} className="water-drop-fall" size={compact ? 14 : 18} color={C.blue}
+            style={{ position: "absolute", top: 0, left: "50%", marginLeft: compact ? -7 : -9, zIndex: 5, pointerEvents: "none" }} />
+        ))}
+        {/* Goal-achieved shine sweep — plays once, briefly, when the daily
+            goal is first reached. */}
+        {justAchieved && (
+          <div className="water-goal-shine-overlay" style={{ position: "absolute", top: 0, bottom: 0, left: "-60%", width: "60%", background: "linear-gradient(115deg, transparent 15%, rgba(255,255,255,0.85) 50%, transparent 85%)", zIndex: 6, pointerEvents: "none" }} />
+        )}
         <div className="flex flex-col items-center justify-center" style={{ position: "absolute", inset: 0 }}>
           <span className="ft-display" style={{ fontSize: compact ? 19 : 26, fontWeight: 700, color: lightOnFill ? "#fff" : C.ink, transition: "color .3s ease" }}>{Math.round(todayWater)} ml</span>
           <span className="ft-body" style={{ fontSize: compact ? 10.5 : 12, color: lightOnFill ? "rgba(255,255,255,0.85)" : C.inkSoft, transition: "color .3s ease" }}>/ {Math.round(goalMl)} ml goal</span>
@@ -1809,7 +2180,7 @@ const handleGoogleSignIn = async () => {
   const [chartsPeriod, setChartsPeriod] = useState("week");
 
   const [profile, setProfile] = useState({ name: "" });
-  const [goals, setGoals] = useState({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, dietType: "", cuisine: "" });
+  const [goals, setGoals] = useState({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, sleep: 480, targetWeight: 0, dietType: "", cuisine: "" });
   const [logs, setLogs] = useState([]);
   const logsRef = useRef(logs);
   useEffect(() => { logsRef.current = logs; }, [logs]);
@@ -1822,6 +2193,7 @@ const handleGoogleSignIn = async () => {
   const [sleepLogs, setSleepLogs] = useState([]);
   const [showSleep, setShowSleep] = useState(false);
   const [showWeight, setShowWeight] = useState(false);
+  const [showScore, setShowScore] = useState(false);
   const [weightAddOpen, setWeightAddOpen] = useState(false);
   const [weightInputHome, setWeightInputHome] = useState("");
   const [splits, setSplits] = useState([]);
@@ -1833,7 +2205,7 @@ const handleGoogleSignIn = async () => {
   const loadAll = useCallback(async () => {
     const [p, g, l, w, e, f, wa, sl, sp, dc, wr, mr] = await Promise.all([
       loadKey("profile", { name: "" }),
-      loadKey("goals", { calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0 }),
+      loadKey("goals", { calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, sleep: 480, targetWeight: 0 }),
       loadKey("meal-logs", []),
       loadKey("weight-logs", []),
       loadKey("exercise-logs", []),
@@ -1845,7 +2217,7 @@ const handleGoogleSignIn = async () => {
       loadKey("weekly-review", null),
       loadKey("monthly-review", null),
     ]);
-    setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, targetWeight: 0, dietType: "", cuisine: "", ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setWaterLogs(wa); setSleepLogs(sl); setSplits(sp); setDailyCoach(dc); setWeeklyReview(wr); setMonthlyReview(mr); setReady(true);
+    setProfile(p); setGoals({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, sleep: 480, targetWeight: 0, dietType: "", cuisine: "", ...g }); setLogs(l); setWeights(w); setExerciseLogs(e); setFavorites(f); setWaterLogs(wa); setSleepLogs(sl); setSplits(sp); setDailyCoach(dc); setWeeklyReview(wr); setMonthlyReview(mr); setReady(true);
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
@@ -2071,6 +2443,18 @@ const handleGoogleSignIn = async () => {
   const todaySleep = useMemo(() => sleepLogs.find((s) => s.date === todayStr()) || null, [sleepLogs]);
   const latestWeight = useMemo(() => (weights.length ? [...weights].sort((a, b) => b.timestamp - a.timestamp)[0] : null), [weights]);
   const nutritionScore = useMemo(() => computeNutritionScore({ todayTotals, todayLogs, goals, waterMl: todayWater }), [todayTotals, todayLogs, goals, todayWater]);
+  const yesterdayDateStr = useMemo(() => daysAgo(1), []);
+  const yesterdayLogsForScore = useMemo(() => logs.filter((l) => l.date === yesterdayDateStr), [logs, yesterdayDateStr]);
+  const yesterdayTotalsForScore = useMemo(() => yesterdayLogsForScore.reduce((acc, l) => ({
+    calories: acc.calories + num(l.calories), protein: acc.protein + num(l.protein_g),
+    carbs: acc.carbs + num(l.carbs_g), fat: acc.fat + num(l.fat_g), fiber: acc.fiber + num(l.fiber_g),
+  }), { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 }), [yesterdayLogsForScore]);
+  const yesterdayWaterForScore = useMemo(() => waterLogs.filter((w) => w.date === yesterdayDateStr).reduce((s, w) => s + num(w.ml), 0), [waterLogs, yesterdayDateStr]);
+  const yesterdayNutritionScore = useMemo(() => (
+    yesterdayLogsForScore.length > 0
+      ? computeNutritionScore({ todayTotals: yesterdayTotalsForScore, todayLogs: yesterdayLogsForScore, goals, waterMl: yesterdayWaterForScore })
+      : null
+  ), [yesterdayLogsForScore, yesterdayTotalsForScore, goals, yesterdayWaterForScore]);
   const microSummary = useMemo(() => computeMicronutrientSummary(todayLogs, goals), [todayLogs, goals, darkMode]);
   const weeklyAchievement = useMemo(() => computeWeeklyAchievement(logs, goals), [logs, goals]);
   const mealDates = useMemo(() => new Set(logs.map((l) => l.date)), [logs]);
@@ -2102,7 +2486,7 @@ const handleGoogleSignIn = async () => {
     };
     clearTimeout(pulseTimerRef.current);
     setPulse(defs[kind] || defs.meal);
-    pulseTimerRef.current = setTimeout(() => setPulse(null), 700);
+    pulseTimerRef.current = setTimeout(() => setPulse(null), 850);
   }
   const [celebrations, setCelebrations] = useState([]);
   function fireCelebration(c) {
@@ -2358,7 +2742,7 @@ if (!user) {
   );
 }
 
-if (!ready) return <div className="flex items-center justify-center" style={{ height: 700, background: C.bgTop }}><Loader2 className="animate-spin" size={22} color={C.orange} /></div>;
+if (!ready) return <div className="flex items-center justify-center" style={{ height: "100dvh", background: C.bgTop }}><Loader2 className="animate-spin" size={22} color={C.orange} /></div>;
 
 
   const trimmedName = profile.name ? profile.name.trim() : "";
@@ -2377,7 +2761,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
   const viewedRemaining = Math.max(0, Math.round(goals.calories - viewedTotals.calories));
 
   return (
-    <div className="flex flex-col relative" style={{ height: 700, maxHeight: "100vh", background: `linear-gradient(180deg, ${C.bgTop} 0%, ${C.bgBottom} 100%)`, overflow: "hidden" }}>
+    <div className="flex flex-col relative" style={{ height: "100dvh", background: `linear-gradient(180deg, ${C.bgTop} 0%, ${C.bgBottom} 100%)`, overflow: "hidden" }}>
       <MicroInteractionStyles />
       <MicroPulse pulse={pulse} />
       <CelebrationBanner celebrations={celebrations} onDismiss={dismissCelebration} />
@@ -2545,7 +2929,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
 
             {!viewedIsToday ? (
               <>
-                <div className="p-4 mb-4 anim-card-in" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", animationDelay: "290ms" }}>
+                <div onClick={() => setShowScore(true)} className="p-4 mb-4 anim-card-in" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", cursor: "pointer", animationDelay: "290ms" }}>
                   <div className="flex items-center gap-3">
                     <div style={{ width: 46, height: 46, borderRadius: "50%", background: nutritionScore.total >= 80 ? C.greenTint : nutritionScore.total >= 55 ? C.tanTint : C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                       <Gauge size={20} color={nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink} />
@@ -2569,7 +2953,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
               // Score / Weight / Sleep / Water — 2x2 grid of big tiles
               <div className="grid grid-cols-2 gap-3 mb-6">
                 {/* Score tile */}
-                <div className="p-4 anim-card-in" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", animationDelay: "290ms" }}>
+                <div onClick={() => setShowScore(true)} className="p-4 anim-card-in" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", cursor: "pointer", animationDelay: "290ms" }}>
                   <div className="flex items-center gap-2 mb-2.5">
                     <div style={{ width: 30, height: 30, borderRadius: "50%", background: nutritionScore.total >= 80 ? C.greenTint : nutritionScore.total >= 55 ? C.tanTint : C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                       <Gauge size={15} color={nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink} />
@@ -2618,9 +3002,11 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                 </div>
 
                 {/* Sleep tile — tap through to the full Sleep Tracker screen. The
-                    floating "Z" letters are a purely decorative background layer,
-                    clipped to this card's own bounds (overflow: hidden) so the
-                    animation never bleeds into neighboring tiles. */}
+                    floating "Z" letters, twinkling stars, and moon glow/warning
+                    cue are all purely decorative background layers, clipped to
+                    this card's own bounds (overflow: hidden) so nothing bleeds
+                    into neighboring tiles. Kept slow and low-opacity throughout
+                    — this is a calm, ambient touch, not an attention-grabber. */}
                 <button onClick={() => setShowSleep(true)} className="text-left p-4 anim-card-in" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", border: "none", position: "relative", overflow: "hidden", animationDelay: "390ms" }}>
                   <style>{`
                     @keyframes sleepZFloat1 { 0% { transform: translate(0px, 6px) rotate(-4deg); opacity: 0; } 12% { opacity: 0.5; } 50% { transform: translate(10px, -30px) rotate(6deg); } 88% { opacity: 0.15; } 100% { transform: translate(-6px, -66px) rotate(-3deg); opacity: 0; } }
@@ -2629,14 +3015,26 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                     .sleep-z-1 { animation: sleepZFloat1 4.2s ease-in-out infinite; }
                     .sleep-z-2 { animation: sleepZFloat2 3.6s ease-in-out infinite .9s; }
                     .sleep-z-3 { animation: sleepZFloat3 5s ease-in-out infinite 1.8s; }
+                    @keyframes sleepTwinkle { 0%, 100% { opacity: 0.15; transform: scale(0.8); } 50% { opacity: 0.7; transform: scale(1); } }
+                    .sleep-star { animation: sleepTwinkle 3.8s ease-in-out infinite; }
+                    @keyframes sleepMoonGlow { 0%, 100% { box-shadow: 0 0 0px 0px rgba(139,127,209,0.4); } 50% { box-shadow: 0 0 12px 4px rgba(139,127,209,0.4); } }
+                    .sleep-moon-good { animation: sleepMoonGlow 3.6s ease-in-out infinite; }
+                    @keyframes sleepMoonWarn { 0%, 100% { box-shadow: 0 0 0px 0px rgba(227,162,58,0.35); } 50% { box-shadow: 0 0 0px 3px rgba(227,162,58,0.35); } }
+                    .sleep-moon-warn { animation: sleepMoonWarn 3.6s ease-in-out infinite; }
                   `}</style>
+                  <div className="sleep-star" style={{ position: "absolute", left: 22, top: 14, width: 3, height: 3, borderRadius: "50%", background: C.purple, pointerEvents: "none", animationDelay: "0s" }} />
+                  <div className="sleep-star" style={{ position: "absolute", left: 44, top: 26, width: 2, height: 2, borderRadius: "50%", background: C.purple, pointerEvents: "none", animationDelay: "1.3s" }} />
+                  <div className="sleep-star" style={{ position: "absolute", left: 64, top: 12, width: 2.5, height: 2.5, borderRadius: "50%", background: C.purple, pointerEvents: "none", animationDelay: "2.4s" }} />
                   <div className="sleep-z-1 ft-display" style={{ position: "absolute", right: 16, bottom: 10, fontSize: 13, fontWeight: 700, color: C.purple, pointerEvents: "none" }}>z</div>
                   <div className="sleep-z-2 ft-display" style={{ position: "absolute", right: 30, bottom: 10, fontSize: 17, fontWeight: 700, color: C.purple, pointerEvents: "none" }}>Z</div>
                   <div className="sleep-z-3 ft-display" style={{ position: "absolute", right: 10, bottom: 10, fontSize: 20, fontWeight: 700, color: C.purple, pointerEvents: "none" }}>Z</div>
                   <div style={{ position: "relative" }}>
                     <div className="flex items-center justify-between mb-2.5">
                       <div className="flex items-center gap-2">
-                        <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.purpleTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <div className={
+                          todaySleep && sleepQuality(todaySleep.durationMinutes, goals.sleep || SLEEP_GOAL_MINUTES) === "good" ? "sleep-moon-good"
+                            : todaySleep && sleepQuality(todaySleep.durationMinutes, goals.sleep || SLEEP_GOAL_MINUTES) === "poor" ? "sleep-moon-warn" : ""
+                        } style={{ width: 30, height: 30, borderRadius: "50%", background: C.purpleTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                           <Moon size={15} color={C.purple} />
                         </div>
                         <span className="ft-display" style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>Sleep</span>
@@ -2649,8 +3047,11 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                     </div>
                     {todaySleep ? (
                       <>
-                        <div className="ft-display mb-1" style={{ fontSize: 22, fontWeight: 700, color: C.ink }}>{fmtSleepDuration(todaySleep.durationMinutes)}</div>
-                        <div className="ft-mono" style={{ fontSize: 11.5, color: C.inkSoft }}>{fmtTime12(todaySleep.bedtime)} → {fmtTime12(todaySleep.wakeTime)}</div>
+                        <div className="ft-display mb-1" style={{ fontSize: 22, fontWeight: 700, color: C.ink }}><SleepDurationCountUp minutes={todaySleep.durationMinutes} /></div>
+                        <div className="ft-mono mb-2" style={{ fontSize: 11.5, color: C.inkSoft }}>{fmtTime12(todaySleep.bedtime)} → {fmtTime12(todaySleep.wakeTime)}</div>
+                        <div style={{ height: 5, borderRadius: 999, background: C.track, overflow: "hidden" }}>
+                          <div style={{ height: "100%", borderRadius: 999, background: C.purple, width: `${clamp((todaySleep.durationMinutes / (goals.sleep || SLEEP_GOAL_MINUTES)) * 100, 0, 100)}%`, transition: "width 1s cubic-bezier(.22,.9,.34,1)" }} />
+                        </div>
                       </>
                     ) : (
                       <span className="ft-body" style={{ fontSize: 13, color: C.inkSoft, fontStyle: "italic" }}>No sleep logged</span>
@@ -2732,7 +3133,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                 const hasThumb = l.source === "photo" && !!l.photo_thumb;
                 return (
                 <SwipeRow onEdit={() => openEdit("meal", l)} onDuplicate={() => duplicateLog(l)} onDelete={() => deleteLog(l.id)}>
-                  <div className={"flex items-center justify-between p-3.5" + (l.id === justAddedId ? " anim-row-flash" : "")} style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)", height: "100%", boxSizing: "border-box" }}>
+                  <div className={"flex items-center justify-between p-3.5" + (l.id === justAddedId ? " anim-row-flash anim-row-slide-in" : "")} style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)", height: "100%", boxSizing: "border-box" }}>
                     <div className="flex items-center gap-3 min-w-0">
                       {hasThumb ? (
                         <img src={l.photo_thumb} alt="" style={{ width: 42, height: 42, borderRadius: 12, objectFit: "cover", flexShrink: 0 }} />
@@ -2790,7 +3191,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                     const overload = computeProgressiveOverload(e, exerciseLogs.filter((x) => x.timestamp < e.timestamp));
                     return (
                       <SwipeRow key={e.id} onEdit={() => openEdit("exercise", e)} onDuplicate={() => duplicateExercise(e)} onDelete={() => deleteExercise(e.id)}>
-                      <div className={"p-3.5" + (e.id === justAddedId ? " anim-row-flash" : "")} style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                      <div className={"p-3.5" + (e.id === justAddedId ? " anim-row-flash anim-row-slide-in" : "")} style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3 min-w-0">
                             <div style={{ width: 38, height: 38, borderRadius: "50%", background: C.blueTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -3262,6 +3663,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
       {showSleep && (
         <SleepTrackerScreen
           sleepLogs={sleepLogs}
+          goals={goals}
           onSave={(bedtime, wakeTime) => addSleep(bedtime, wakeTime)}
           onClose={() => setShowSleep(false)}
         />
@@ -3276,6 +3678,14 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
           onAdd={(w) => addWeightEntry(w)}
           onDelete={(id) => deleteWeightEntry(id)}
           onClose={() => setShowWeight(false)}
+        />
+      )}
+      {showScore && (
+        <NutritionScoreScreen
+          nutritionScore={nutritionScore}
+          yesterdayScore={yesterdayNutritionScore}
+          fireCelebration={fireCelebration}
+          onClose={() => setShowScore(false)}
         />
       )}
     </div>
@@ -3425,6 +3835,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     });
     setLastCalculatedPortion(`${grams}g`);
     setAiEstimate(null); // exact label data — not an AI guess, so correction-learning doesn't apply here
+    setShowFullDetails(true);
   }
 
   async function handleImagePick(e, slot = 1) {
@@ -3453,7 +3864,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
 
   async function analyze(overrideDescription) {
     const descriptionToUse = overrideDescription != null ? overrideDescription : description;
-    setError(null); setPending(null);
+    setError(null); setPending(null); setJustAnalyzed(false);
     if (mode === "photo" && !imagePreview) { setError("Add a photo first."); return; }
     if (mode === "text" && descriptionToUse.trim().length < 2) { setError("Describe what you ate first."); return; }
     setAnalyzing(true);
@@ -3490,11 +3901,17 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       setLastCalculatedPortion(estimatedPortion);
       setAiEstimate({ portion: estimatedPortion, calories: num(parsed.calories) });
       setQuickFeedbackGiven(null);
+      if (items.length > 0) setShowItemBreakdown(true);
+      setJustAnalyzed(true);
+      setShowFullDetails(false);
+      setTimeout(() => setJustAnalyzed(false), 2200);
     } catch (e) {
       setError((e && e.message ? e.message : "Couldn't analyze that meal") + " — enter it manually below.");
       setPending({ ...EMPTY_MEAL, food_name: mode === "text" ? descriptionToUse : "Logged meal" });
       setLastCalculatedPortion("");
       setAiEstimate(null);
+      setJustAnalyzed(false);
+      setShowFullDetails(true);
     } finally { setAnalyzing(false); }
   }
 
@@ -3657,6 +4074,18 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   const [showWhyEstimate, setShowWhyEstimate] = useState(false);
   const [showItemBreakdown, setShowItemBreakdown] = useState(false);
   const [quickFeedbackGiven, setQuickFeedbackGiven] = useState(null); // null | "up" | "down"
+  // True for a brief window right after analyze() lands a fresh AI result —
+  // drives the count-up/stagger reveal animations on the results card.
+  // Left false for manual entry, barcode matches, and when reopening an
+  // existing logged meal to edit, since those aren't a "fresh" AI moment.
+  const [justAnalyzed, setJustAnalyzed] = useState(false);
+  // Controls whether the results screen shows the "Analysis Complete"
+  // summary (screen matching the reference design's overview) or the full
+  // editable breakdown. Starts true (skip straight to the full form) when
+  // editing an existing saved entry — the summary is only for a fresh AI
+  // result to react to, not something to re-show every time an old meal is
+  // reopened.
+  const [showFullDetails, setShowFullDetails] = useState(!!editingEntry);
 
   function giveQuickFeedback(isAccurate) {
     if (!aiEstimate || !pending || !pending.food_name) return;
@@ -3883,113 +4312,153 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
               <button onClick={() => analyze()} disabled={analyzing || compressing} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 14, fontWeight: 600, opacity: analyzing ? 0.7 : 1 }}>
                 {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Utensils size={16} />}{analyzing ? "Analyzing meal…" : "Analyze meal"}
               </button>
-              {analyzing && <NutritionSkeleton />}
+              {analyzing && <MealAnalyzingCard imagePreview={mode === "photo" ? imagePreview : null} />}
             </>
           )}
-          <button onClick={() => { setPending({ ...EMPTY_MEAL }); setAiEstimate(null); setShowWhyEstimate(false); }}
+          <button onClick={() => { setPending({ ...EMPTY_MEAL }); setAiEstimate(null); setShowWhyEstimate(false); setShowFullDetails(true); }}
             className="w-full flex items-center justify-center py-2.5 mt-2 ft-body" style={{ color: C.inkSoft, fontSize: 12.5, fontWeight: 500 }}>Skip — enter nutrition manually</button>
         </>
       )}
       {pending && (
-        <div>
-          <div className="flex items-start justify-between gap-2 mb-1">
-            <input value={pending.food_name} onChange={(e) => updateField("food_name", e.target.value)} placeholder="Meal name" className="flex-1 ft-display"
-              style={{ fontSize: 20, fontWeight: 700, color: C.ink, background: "transparent", border: "none", outline: "none", borderBottom: `1px solid ${C.line}`, paddingBottom: 4 }} />
-            <button onClick={() => onToggleFavorite && onToggleFavorite(pending)} className="p-1.5" style={{ flexShrink: 0 }} title="Favorite this meal">
-              <Star size={18} color={C.tan} fill={isFav(pending.food_name) ? C.tan : "none"} />
-            </button>
-          </div>
-          <input value={pending.estimated_portion} onChange={(e) => updateField("estimated_portion", e.target.value)} placeholder="Portion (e.g. 1 cup, 200g)"
-            className="w-full ft-body mb-2" style={{ fontSize: 12, color: C.inkSoft, background: "transparent", border: "none", outline: "none" }} />
+        <div className="anim-result-spring-in">
+          <style>{`
+            @keyframes resultSpringIn { 0% { opacity: 0; transform: scale(0.94) translateY(6px); } 60% { opacity: 1; transform: scale(1.015) translateY(0); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
+            .anim-result-spring-in { animation: resultSpringIn 0.45s cubic-bezier(.34,1.4,.64,1) both; }
+            @keyframes resultFadeIn { 0% { opacity: 0; transform: translateY(4px); } 100% { opacity: 1; transform: translateY(0); } }
+            .anim-result-fade-in { animation: resultFadeIn 0.4s ease both; }
+            @keyframes resultItemPopIn { 0% { opacity: 0; transform: translateY(8px); } 100% { opacity: 1; transform: translateY(0); } }
+            .anim-result-item-pop { animation: resultItemPopIn 0.35s ease both; }
+            @keyframes resultSlideUp { 0% { opacity: 0; transform: translateY(10px); } 100% { opacity: 1; transform: translateY(0); } }
+            .anim-result-slide-up { animation: resultSlideUp 0.4s ease both; }
+          `}</style>
 
-          {pending.confidence && pending.confidence !== "manual" && (
-            <div className="mb-3">
-              <div className="flex items-center gap-2 flex-wrap">
-                <ConfidenceBadge level={pending.confidence} />
-                {pending.estimate_basis && (
-                  <button onClick={() => setShowWhyEstimate((s) => !s)} className="ft-body flex items-center gap-1" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>
-                    Why this estimate? <ChevronDown size={11} style={{ transform: showWhyEstimate ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
-                  </button>
-                )}
-                {pending.items && pending.items.length > 1 && (
-                  <button onClick={() => setShowItemBreakdown((s) => !s)} className="ft-body flex items-center gap-1" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>
-                    Item breakdown ({pending.items.length}) <ChevronDown size={11} style={{ transform: showItemBreakdown ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
-                  </button>
-                )}
-                {aiEstimate && (
-                  <div className="flex items-center gap-1.5 ml-auto">
-                    {quickFeedbackGiven ? (
-                      <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft, fontWeight: 600 }}>
-                        {quickFeedbackGiven === "up" ? "Thanks — glad it's close" : "Thanks — we'll be more careful with this one"}
-                      </span>
-                    ) : (
-                      <>
-                        <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>Look right?</span>
-                        <button onClick={() => giveQuickFeedback(true)} className="p-1 rounded-full" style={{ background: C.card }} title="Looks about right">
-                          <ThumbsUp size={13} color={C.inkSoft} />
-                        </button>
-                        <button onClick={() => giveQuickFeedback(false)} className="p-1 rounded-full" style={{ background: C.card }} title="Doesn't look right">
-                          <ThumbsDown size={13} color={C.inkSoft} />
-                        </button>
-                      </>
+          {pending.confidence && pending.confidence !== "manual" && !showFullDetails ? (
+            <MealCompleteSummary pending={pending} goals={goals} justAnalyzed={justAnalyzed} onViewDetails={() => setShowFullDetails(true)} />
+          ) : (
+            <>
+              <div className="flex items-start justify-between gap-2 mb-1">
+                <input value={pending.food_name} onChange={(e) => updateField("food_name", e.target.value)} placeholder="Meal name" className="flex-1 ft-display"
+                  style={{ fontSize: 20, fontWeight: 700, color: C.ink, background: "transparent", border: "none", outline: "none", borderBottom: `1px solid ${C.line}`, paddingBottom: 4 }} />
+                <button onClick={() => onToggleFavorite && onToggleFavorite(pending)} className="p-1.5" style={{ flexShrink: 0 }} title="Favorite this meal">
+                  <Star size={18} color={C.tan} fill={isFav(pending.food_name) ? C.tan : "none"} />
+                </button>
+              </div>
+              <input value={pending.estimated_portion} onChange={(e) => updateField("estimated_portion", e.target.value)} placeholder="Portion (e.g. 1 cup, 200g)"
+                className="w-full ft-body mb-2" style={{ fontSize: 12, color: C.inkSoft, background: "transparent", border: "none", outline: "none" }} />
+
+              {pending.confidence && pending.confidence !== "manual" && (
+                <button onClick={() => setShowFullDetails(false)} className="flex items-center gap-1 mb-2.5 ft-body" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>
+                  <ChevronLeft size={13} /> Back to summary
+                </button>
+              )}
+
+              {pending.confidence && pending.confidence !== "manual" && (
+                <div className="mb-3">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className={justAnalyzed ? "anim-result-fade-in" : ""}><ConfidenceBadge level={pending.confidence} /></div>
+                    {pending.estimate_basis && (
+                      <button onClick={() => setShowWhyEstimate((s) => !s)} className="ft-body flex items-center gap-1" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>
+                        Why this estimate? <ChevronDown size={11} style={{ transform: showWhyEstimate ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
+                      </button>
+                    )}
+                    {pending.items && pending.items.length > 1 && (
+                      <button onClick={() => setShowItemBreakdown((s) => !s)} className="ft-body flex items-center gap-1" style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600 }}>
+                        Item breakdown ({pending.items.length}) <ChevronDown size={11} style={{ transform: showItemBreakdown ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
+                      </button>
+                    )}
+                    {aiEstimate && (
+                      <div className="flex items-center gap-1.5 ml-auto">
+                        {quickFeedbackGiven ? (
+                          <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft, fontWeight: 600 }}>
+                            {quickFeedbackGiven === "up" ? "Thanks — glad it's close" : "Thanks — we'll be more careful with this one"}
+                          </span>
+                        ) : (
+                          <>
+                            <span className="ft-body" style={{ fontSize: 11.5, color: C.inkSoft }}>Look right?</span>
+                            <button onClick={() => giveQuickFeedback(true)} className="p-1 rounded-full" style={{ background: C.card }} title="Looks about right">
+                              <ThumbsUp size={13} color={C.inkSoft} />
+                            </button>
+                            <button onClick={() => giveQuickFeedback(false)} className="p-1 rounded-full" style={{ background: C.card }} title="Doesn't look right">
+                              <ThumbsDown size={13} color={C.inkSoft} />
+                            </button>
+                          </>
+                        )}
+                      </div>
                     )}
                   </div>
-                )}
-              </div>
-              {showWhyEstimate && pending.estimate_basis && (
-                <div className="mt-2 p-2.5 rounded-xl" style={{ background: C.bgBottom }}>
-                  <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4 }}>{pending.estimate_basis}</span>
-                </div>
-              )}
-              {showItemBreakdown && pending.items && pending.items.length > 1 && (
-                <div className="mt-2 p-2.5 rounded-xl flex flex-col gap-2" style={{ background: C.bgBottom }}>
-                  {pending.items.map((it, i) => (
-                    <div key={i} className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.food_name}</div>
-                        {it.estimated_portion && <div className="ft-body" style={{ fontSize: 11, color: C.inkSoft }}>{it.estimated_portion}</div>}
-                      </div>
-                      <span className="ft-mono flex-shrink-0" style={{ fontSize: 12, color: C.inkSoft }}>{Math.round(it.calories)} kcal · P{Math.round(it.protein_g)} C{Math.round(it.carbs_g)} F{Math.round(it.fat_g)}</span>
+                  {showWhyEstimate && pending.estimate_basis && (
+                    <div className="mt-2 p-2.5 rounded-xl" style={{ background: C.bgBottom }}>
+                      <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4 }}>{pending.estimate_basis}</span>
                     </div>
-                  ))}
+                  )}
+                  {/* Food Breakdown — each detected item as its own row (icon,
+                      name + portion, calories + macros), matching the
+                      reference design's dedicated breakdown screen. */}
+                  {showItemBreakdown && pending.items && pending.items.length > 1 && (
+                    <div className="mt-2 p-2 rounded-xl flex flex-col gap-1.5" style={{ background: C.bgBottom }}>
+                      {pending.items.map((it, i) => {
+                        const palette = [
+                          { bg: C.orangeTint, fg: C.orange }, { bg: C.greenTint, fg: C.green },
+                          { bg: C.tanTint, fg: C.tan }, { bg: C.pinkTint, fg: C.pink },
+                          { bg: C.blueTint, fg: C.blue }, { bg: C.purpleTint, fg: C.purple },
+                        ][i % 6];
+                        return (
+                          <div key={i} className={justAnalyzed ? "anim-result-item-pop flex items-center gap-2.5 p-1.5" : "flex items-center gap-2.5 p-1.5"}
+                            style={justAnalyzed ? { animationDelay: `${i * 90}ms` } : undefined}>
+                            <div className="flex items-center justify-center flex-shrink-0" style={{ width: 36, height: 36, borderRadius: "50%", background: palette.bg }}>
+                              <Utensils size={15} color={palette.fg} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.food_name}</span>
+                                <span className="ft-mono flex-shrink-0" style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{Math.round(it.calories)} kcal</span>
+                              </div>
+                              <div className="flex items-center justify-between gap-2 mt-0.5">
+                                <span className="ft-body" style={{ fontSize: 11, color: C.inkSoft }}>{it.estimated_portion || ""}</span>
+                                <span className="ft-mono flex-shrink-0" style={{ fontSize: 11, color: C.inkSoft }}>P{Math.round(it.protein_g)} C{Math.round(it.carbs_g)} F{Math.round(it.fat_g)}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          )}
 
-          {portionIsStale && (
-            <div className="flex items-center justify-between gap-2 p-2.5 mb-3 rounded-xl" style={{ background: C.orangeTint }}>
-              <span className="ft-body" style={{ fontSize: 12, color: C.orangeDeep, lineHeight: 1.35 }}>Portion changed — nutrition below is for the old amount.</span>
-              <button onClick={recalculateFromPortion} disabled={recalculating} className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-full ft-body flex-shrink-0"
-                style={{ background: C.ink, color: C.onInk, fontSize: 12, fontWeight: 600, opacity: recalculating ? 0.7 : 1 }}>
-                {recalculating ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}{recalculating ? "Recalculating…" : "Recalculate nutrition"}
-              </button>
-            </div>
-          )}
-          {pending.portion_guidance ? (
-            <div className="flex items-start gap-2 p-3 mb-3 rounded-xl" style={{ background: C.orangeTint }}>
-              <div style={{ marginTop: 1 }}><GuidanceIcon text={pending.portion_guidance} /></div>
-              <div className="flex-1">
-                <div className="mb-1"><PortionBadge verdict={pending.portion_verdict} percent={pending.portion_change_percent} /></div>
-                <span className="ft-body" style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.4 }}>{pending.portion_guidance}</span>
+              {portionIsStale && (
+                <div className="flex items-center justify-between gap-2 p-2.5 mb-3 rounded-xl" style={{ background: C.orangeTint }}>
+                  <span className="ft-body" style={{ fontSize: 12, color: C.orangeDeep, lineHeight: 1.35 }}>Portion changed — nutrition below is for the old amount.</span>
+                  <button onClick={recalculateFromPortion} disabled={recalculating} className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-full ft-body flex-shrink-0"
+                    style={{ background: C.ink, color: C.onInk, fontSize: 12, fontWeight: 600, opacity: recalculating ? 0.7 : 1 }}>
+                    {recalculating ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}{recalculating ? "Recalculating…" : "Recalculate nutrition"}
+                  </button>
+                </div>
+              )}
+
+              {/* Portion Advice — a scored banner (verdict-colored, like the
+                  reference design's "Good portion!" card) plus a short list
+                  of suggestions built from data already on the meal. */}
+              {pending.portion_guidance ? (
+                <PortionAdviceCard pending={pending} justAnalyzed={justAnalyzed} goals={goals} />
+              ) : (
+                pending.food_name && pending.calories > 0 && (
+                  <button onClick={getPortionAdvice} disabled={advising} className="w-full flex items-center justify-center gap-2 py-2.5 mb-3 rounded-xl ft-body"
+                    style={{ background: C.orangeTint, color: C.orangeDeep, fontSize: 12.5, fontWeight: 600, opacity: advising ? 0.7 : 1 }}>
+                    {advising ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}{advising ? "Thinking…" : "Get AI portion guidance"}
+                  </button>
+                )
+              )}
+              <NutritionLabel data={pending} editable onChange={updateField} />
+              {error && <div className="ft-body mt-2" style={{ fontSize: 12, color: C.pink }}>{error}</div>}
+              <div className="flex gap-2 mt-3">
+                {!editingEntry && (
+                  <button onClick={() => { setPending(null); setAiEstimate(null); setShowWhyEstimate(false); }} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.card, color: C.ink, fontSize: 14, fontWeight: 600 }}><X size={16} /> Back</button>
+                )}
+                <button onClick={save} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.orange, color: "#fff", fontSize: 14, fontWeight: 600 }}><Check size={16} /> {editingEntry ? "Save changes" : "Save log"}</button>
               </div>
-            </div>
-          ) : (
-            pending.food_name && pending.calories > 0 && (
-              <button onClick={getPortionAdvice} disabled={advising} className="w-full flex items-center justify-center gap-2 py-2.5 mb-3 rounded-xl ft-body"
-                style={{ background: C.orangeTint, color: C.orangeDeep, fontSize: 12.5, fontWeight: 600, opacity: advising ? 0.7 : 1 }}>
-                {advising ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}{advising ? "Thinking…" : "Get AI portion guidance"}
-              </button>
-            )
+            </>
           )}
-          <NutritionLabel data={pending} editable onChange={updateField} />
-          {error && <div className="ft-body mt-2" style={{ fontSize: 12, color: C.pink }}>{error}</div>}
-          <div className="flex gap-2 mt-3">
-            {!editingEntry && (
-              <button onClick={() => { setPending(null); setAiEstimate(null); setShowWhyEstimate(false); }} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.card, color: C.ink, fontSize: 14, fontWeight: 600 }}><X size={16} /> Back</button>
-            )}
-            <button onClick={save} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-full ft-body" style={{ background: C.orange, color: "#fff", fontSize: 14, fontWeight: 600 }}><Check size={16} /> {editingEntry ? "Save changes" : "Save log"}</button>
-          </div>
         </div>
       )}
     </>
@@ -4289,6 +4758,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
               { label: "Fat", value: `${goals.fat}g` },
               { label: "Fiber", value: `${goals.fiber}g` },
               { label: "Water", value: `${goals.water}ml` },
+              { label: "Sleep", value: fmtSleepDuration(goals.sleep || SLEEP_GOAL_MINUTES) },
               ...(goals.targetWeight > 0 ? [{ label: "Goal weight", value: `${goals.targetWeight}kg` }] : []),
               ...(goals.dietType ? [{ label: "Diet", value: goals.dietType }] : []),
               ...(goals.cuisine ? [{ label: "Cuisine", value: goals.cuisine }] : []),
@@ -4301,7 +4771,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
           </div>
         ) : (
           <div className="mt-3">
-            {field("calories", "Calories", "kcal")}{field("protein", "Protein", "g")}{field("carbs", "Carbohydrates", "g")}{field("fat", "Fat", "g")}{field("fiber", "Fiber", "g")}{field("water", "Water", "ml")}
+            {field("calories", "Calories", "kcal")}{field("protein", "Protein", "g")}{field("carbs", "Carbohydrates", "g")}{field("fat", "Fat", "g")}{field("fiber", "Fiber", "g")}{field("water", "Water", "ml")}{field("sleep", "Sleep goal", "min")}
             {field("targetWeight", "Goal weight", "kg (0 = off)")}
             <div className="mb-3">
               <div className="mb-1"><span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>Diet type</span></div>
@@ -4343,12 +4813,25 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
 }
 
 // ---------- Sleep Tracker ----------
-// Full-screen page opened from the Home "Sleep" card. A decorative 24-hour dial
-// (drawn with SVG arcs — no drag physics, since the actual time selection is done
-// via native time pickers triggered by tapping the bedtime/wake handles or the
-// labels below, same pattern as the existing date-jump control on Home) shows the
-// selected sleep window at a glance; "Log Sleep" saves one entry per day.
+// Full-screen page opened from the Home "Sleep" card. A 24-hour dial (drawn
+// with SVG arcs) shows the selected sleep window at a glance; the bedtime and
+// wake handles can be dragged around the ring to adjust the time directly, or
+// tapped (without dragging) to open the native time picker instead. "Log
+// Sleep" saves one entry per day.
 function angleForHour(h) { return (h / 24) * 360 - 90; }
+// Inverse of angleForHour — turns a raw pointer angle (degrees, atan2 range)
+// back into an hour-of-day float, used while dragging the bed/alarm handles.
+function hourForAngle(angleDeg) {
+  const a = ((angleDeg + 90) % 360 + 360) % 360;
+  return (a / 360) * 24;
+}
+function hourFloatToTimeStr(hourFloat) {
+  let totalMin = Math.round((hourFloat * 60) / 5) * 5; // snap to 5-minute increments
+  totalMin = ((totalMin % 1440) + 1440) % 1440;
+  const hh = Math.floor(totalMin / 60);
+  const mm = totalMin % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
 function polarPoint(cx, cy, r, angleDeg) {
   const rad = (angleDeg * Math.PI) / 180;
   return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
@@ -4362,7 +4845,7 @@ function describeSleepArc(cx, cy, r, startHour, endHour) {
   const largeArcFlag = sweep > 180 ? 1 : 0;
   return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 1 ${end.x} ${end.y}`;
 }
-function SleepDial({ bedtime, wakeTime, onTapBedtime, onTapWake }) {
+function SleepDial({ bedtime, wakeTime, sleepGoalMinutes = SLEEP_GOAL_MINUTES, onTapBedtime, onTapWake, onDragBedtime, onDragWake }) {
   const size = 240, cx = size / 2, cy = size / 2, r = 96, trackWidth = 15;
   const [bh, bm] = bedtime.split(":").map(Number);
   const [wh, wm] = wakeTime.split(":").map(Number);
@@ -4373,12 +4856,74 @@ function SleepDial({ bedtime, wakeTime, onTapBedtime, onTapWake }) {
   const moonPos = polarPoint(cx, cy, r - trackWidth / 2 - 16, angleForHour(0));
   const sunPos = polarPoint(cx, cy, r - trackWidth / 2 - 16, angleForHour(12));
   const durationMins = sleepDurationMinutes(bedtime, wakeTime);
+  const quality = sleepQuality(durationMins, sleepGoalMinutes);
+
+  // The arc "draws itself" once when the dial first mounts (bedOffset 100 ->
+  // 0, using pathLength=100 so the dash math is independent of the arc's
+  // actual geometric length/sweep). Deliberately doesn't reset on every
+  // bedtime/wake change afterward — while dragging, the arc should track the
+  // finger instantly, not replay a draw-in each time.
+  const [arcOffset, setArcOffset] = useState(100);
+  useEffect(() => {
+    const t = setTimeout(() => setArcOffset(0), 50);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Dragging: track which handle (if any) is active via pointer capture, so
+  // movement is tracked even once the finger/cursor leaves the small handle.
+  // A short tap (no meaningful movement) still falls through to the native
+  // time picker via onTapBedtime/onTapWake, same as before.
+  const dialRef = useRef(null);
+  const draggingRef = useRef(null); // "bed" | "wake" | null
+  const didDragRef = useRef(false);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+
+  function angleFromPointer(e) {
+    const el = dialRef.current;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    const px = e.clientX - rect.left - cx;
+    const py = e.clientY - rect.top - cy;
+    return (Math.atan2(py, px) * 180) / Math.PI;
+  }
+  function startDrag(which) {
+    return (e) => {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      draggingRef.current = which;
+      didDragRef.current = false;
+      dragStartRef.current = { x: e.clientX, y: e.clientY };
+    };
+  }
+  function onDragMove(e) {
+    if (!draggingRef.current) return;
+    const dx = e.clientX - dragStartRef.current.x, dy = e.clientY - dragStartRef.current.y;
+    if (Math.hypot(dx, dy) > 4) didDragRef.current = true;
+    const timeStr = hourFloatToTimeStr(hourForAngle(angleFromPointer(e)));
+    if (draggingRef.current === "bed") onDragBedtime(timeStr);
+    else onDragWake(timeStr);
+  }
+  function endDrag() { draggingRef.current = null; }
+  function tapIfNoDrag(fn) { return () => { if (!didDragRef.current) fn(); }; }
 
   return (
-    <div className="relative flex items-center justify-center" style={{ width: size, height: size, margin: "0 auto" }}>
+    <div ref={dialRef} className="relative flex items-center justify-center" style={{ width: size, height: size, margin: "0 auto" }}>
+      <style>{`
+        @keyframes dialTwinkle { 0%, 100% { opacity: 0.12; } 50% { opacity: 0.6; } }
+        .dial-star { animation: dialTwinkle 4s ease-in-out infinite; }
+        @keyframes dialMoonGlow { 0%, 100% { filter: drop-shadow(0 0 0px rgba(139,127,209,0.7)); } 50% { filter: drop-shadow(0 0 4px rgba(139,127,209,0.9)); } }
+        .dial-moon-good { animation: dialMoonGlow 3.6s ease-in-out infinite; }
+        @keyframes dialMoonWarn { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+        .dial-moon-warn { animation: dialMoonWarn 3.6s ease-in-out infinite; }
+      `}</style>
       <svg width={size} height={size} style={{ position: "absolute", inset: 0 }}>
         <circle cx={cx} cy={cy} r={r} fill="none" stroke={C.track} strokeWidth={trackWidth} />
-        <path d={arcPath} fill="none" stroke={C.blue} strokeWidth={trackWidth} strokeLinecap="round" />
+        {/* A few faint, slowly twinkling stars scattered inside the dial —
+            calm ambient texture, not tied to any data. */}
+        <circle className="dial-star" cx={cx - 34} cy={cy - 12} r="1.6" fill={C.purple} style={{ animationDelay: "0s" }} />
+        <circle className="dial-star" cx={cx + 30} cy={cy + 22} r="1.3" fill={C.purple} style={{ animationDelay: "1.4s" }} />
+        <circle className="dial-star" cx={cx + 8} cy={cy - 30} r="1.3" fill={C.purple} style={{ animationDelay: "2.6s" }} />
+        <path d={arcPath} fill="none" stroke={C.blue} strokeWidth={trackWidth} strokeLinecap="round" pathLength={100} strokeDasharray={100} strokeDashoffset={arcOffset}
+          style={{ transition: "stroke-dashoffset 1.3s cubic-bezier(.22,.9,.34,1)" }} />
         {Array.from({ length: 12 }).map((_, i) => {
           const h = i * 2;
           const p1 = polarPoint(cx, cy, r - trackWidth / 2 - 4, angleForHour(h));
@@ -4387,12 +4932,24 @@ function SleepDial({ bedtime, wakeTime, onTapBedtime, onTapWake }) {
           );
         })}
       </svg>
-      <Moon size={13} color={C.purple} style={{ position: "absolute", left: moonPos.x - 6.5, top: moonPos.y - 6.5 }} />
+      <Moon size={13} color={C.purple} className={quality === "good" ? "dial-moon-good" : quality === "poor" ? "dial-moon-warn" : ""} style={{ position: "absolute", left: moonPos.x - 6.5, top: moonPos.y - 6.5 }} />
       <Sunrise size={13} color={C.tan} style={{ position: "absolute", left: sunPos.x - 6.5, top: sunPos.y - 6.5 }} />
-      <button onClick={onTapBedtime} className="flex items-center justify-center" style={{ position: "absolute", left: bedPos.x - 17, top: bedPos.y - 17, width: 34, height: 34, borderRadius: "50%", background: C.blue, border: `3px solid ${C.card}`, boxShadow: "0 2px 8px rgba(0,0,0,0.2)" }}>
+      <button
+        onClick={tapIfNoDrag(onTapBedtime)}
+        onPointerDown={startDrag("bed")}
+        onPointerMove={onDragMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        className="flex items-center justify-center" style={{ position: "absolute", left: bedPos.x - 17, top: bedPos.y - 17, width: 34, height: 34, borderRadius: "50%", background: C.blue, border: `3px solid ${C.card}`, boxShadow: "0 2px 8px rgba(0,0,0,0.2)", touchAction: "none", cursor: "grab" }}>
         <BedDouble size={15} color="#fff" />
       </button>
-      <button onClick={onTapWake} className="flex items-center justify-center" style={{ position: "absolute", left: wakePos.x - 17, top: wakePos.y - 17, width: 34, height: 34, borderRadius: "50%", background: C.green, border: `3px solid ${C.card}`, boxShadow: "0 2px 8px rgba(0,0,0,0.2)" }}>
+      <button
+        onClick={tapIfNoDrag(onTapWake)}
+        onPointerDown={startDrag("wake")}
+        onPointerMove={onDragMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        className="flex items-center justify-center" style={{ position: "absolute", left: wakePos.x - 17, top: wakePos.y - 17, width: 34, height: 34, borderRadius: "50%", background: C.green, border: `3px solid ${C.card}`, boxShadow: "0 2px 8px rgba(0,0,0,0.2)", touchAction: "none", cursor: "grab" }}>
         <AlarmClock size={15} color="#fff" />
       </button>
       <div className="flex flex-col items-center" style={{ position: "absolute" }}>
@@ -4401,7 +4958,7 @@ function SleepDial({ bedtime, wakeTime, onTapBedtime, onTapWake }) {
     </div>
   );
 }
-function SleepTrackerScreen({ sleepLogs, onSave, onClose }) {
+function SleepTrackerScreen({ sleepLogs, goals, onSave, onClose }) {
   const latest = sleepLogs.length ? [...sleepLogs].sort((a, b) => b.timestamp - a.timestamp)[0] : null;
   const [bedtime, setBedtime] = useState(latest ? latest.bedtime : "22:45");
   const [wakeTime, setWakeTime] = useState(latest ? latest.wakeTime : "07:00");
@@ -4409,6 +4966,7 @@ function SleepTrackerScreen({ sleepLogs, onSave, onClose }) {
   const bedInputRef = useRef(null);
   const wakeInputRef = useRef(null);
   const durationMins = sleepDurationMinutes(bedtime, wakeTime);
+  const sleepGoalMinutes = (goals && goals.sleep) || SLEEP_GOAL_MINUTES;
 
   function openPicker(ref) {
     const el = ref.current;
@@ -4418,6 +4976,14 @@ function SleepTrackerScreen({ sleepLogs, onSave, onClose }) {
 
   return (
     <div className="absolute inset-0 flex flex-col" style={{ background: `linear-gradient(180deg, ${C.bgTop} 0%, ${C.bgBottom} 100%)`, zIndex: 50 }}>
+      <style>{`
+        @keyframes sleepScreenTwinkle { 0%, 100% { opacity: 0.1; } 50% { opacity: 0.5; } }
+        .sleep-screen-star { animation: sleepScreenTwinkle 4.5s ease-in-out infinite; pointer-events: none; }
+      `}</style>
+      <div className="sleep-screen-star" style={{ position: "absolute", left: "18%", top: 28, width: 3, height: 3, borderRadius: "50%", background: C.purple, animationDelay: "0s" }} />
+      <div className="sleep-screen-star" style={{ position: "absolute", left: "72%", top: 44, width: 2, height: 2, borderRadius: "50%", background: C.purple, animationDelay: "1.6s" }} />
+      <div className="sleep-screen-star" style={{ position: "absolute", left: "88%", top: 22, width: 2.5, height: 2.5, borderRadius: "50%", background: C.purple, animationDelay: "3s" }} />
+      <div className="sleep-screen-star" style={{ position: "absolute", left: "40%", top: 60, width: 2, height: 2, borderRadius: "50%", background: C.purple, animationDelay: "2.2s" }} />
       <div className="flex items-center px-4" style={{ paddingTop: "calc(16px + env(safe-area-inset-top, 0px))", paddingBottom: 12 }}>
         <button onClick={onClose} className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: "50%", background: C.card, border: "none" }}>
           <ChevronLeft size={17} color={C.ink} />
@@ -4427,7 +4993,7 @@ function SleepTrackerScreen({ sleepLogs, onSave, onClose }) {
 
       <div className="flex-1 overflow-y-auto px-4" style={{ paddingBottom: 32 }}>
         <div className="p-5 mb-4" style={{ background: C.card, borderRadius: 24, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
-          <SleepDial bedtime={bedtime} wakeTime={wakeTime} onTapBedtime={() => openPicker(bedInputRef)} onTapWake={() => openPicker(wakeInputRef)} />
+          <SleepDial bedtime={bedtime} wakeTime={wakeTime} sleepGoalMinutes={sleepGoalMinutes} onTapBedtime={() => openPicker(bedInputRef)} onTapWake={() => openPicker(wakeInputRef)} onDragBedtime={setBedtime} onDragWake={setWakeTime} />
 
           <div className="flex items-center justify-around mt-5">
             <div className="relative flex flex-col items-center">
@@ -4445,6 +5011,16 @@ function SleepTrackerScreen({ sleepLogs, onSave, onClose }) {
               </div>
               <button onClick={() => openPicker(wakeInputRef)} className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink, background: "none", border: "none" }}>{fmtTime12(wakeTime)}</button>
               <input ref={wakeInputRef} type="time" value={wakeTime} onChange={(e) => setWakeTime(e.target.value)} style={{ position: "absolute", inset: 0, opacity: 0, pointerEvents: "none" }} />
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="ft-body" style={{ fontSize: 11.5, fontWeight: 600, color: C.inkSoft }}>Sleep goal</span>
+              <span className="ft-mono" style={{ fontSize: 11.5, color: C.inkSoft }}>{fmtSleepDuration(durationMins)} / {fmtSleepDuration(sleepGoalMinutes)}</span>
+            </div>
+            <div style={{ height: 6, borderRadius: 999, background: C.track, overflow: "hidden" }}>
+              <div style={{ height: "100%", borderRadius: 999, background: C.purple, width: `${clamp((durationMins / sleepGoalMinutes) * 100, 0, 100)}%`, transition: "width 1s cubic-bezier(.22,.9,.34,1)" }} />
             </div>
           </div>
 
@@ -4490,6 +5066,107 @@ function SleepTrackerScreen({ sleepLogs, onSave, onClose }) {
 // Tracker's pattern (back button, quick entry, full history list). Shows a
 // trend line (reusing the same weightSeries/weightPace/weightProjection data
 // already computed on Home/Insights) plus every logged weigh-in with delete.
+// ---------- Nutrition Score detail screen ----------
+// Opened by tapping the Score tile on Home. The ring counts up from 0 on
+// mount (Ring already handles that), the breakdown bars fill in with a
+// staggered delay so they read as sequential, the best-performing metric
+// gets a soft glow and the weakest a gentle pulsing "focus" cue, and the
+// score's move vs yesterday shows as a small delta badge. Crossing 90 or
+// hitting 100 fires the app's existing celebration banner (with confetti)
+// rather than inventing a separate effect.
+function NutritionScoreScreen({ nutritionScore, yesterdayScore, onClose, fireCelebration }) {
+  const total = nutritionScore.total;
+  const delta = yesterdayScore ? total - yesterdayScore.total : null;
+  const entries = Object.entries(nutritionScore.breakdown);
+  const scoreColor = total >= 80 ? C.green : total >= 55 ? C.tan : C.pink;
+
+  // Bars start at 0% and animate up to their real score just after mount, so
+  // the fill reads as a fresh animation each time the screen opens rather
+  // than appearing already-full.
+  const [barsIn, setBarsIn] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setBarsIn(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  // Fire once per time the screen is opened, not on every re-render.
+  const firedRef = useRef(false);
+  useEffect(() => {
+    if (firedRef.current) return;
+    firedRef.current = true;
+    if (total >= 100) {
+      fireCelebration({ icon: Trophy, color: C.green, bg: C.greenTint, text: "🎉 Perfect score — 100/100!" });
+    } else if (total >= 90) {
+      fireCelebration({ icon: Trophy, color: C.tan, bg: C.tanTint, text: `🌟 Excellent day — ${total}/100!` });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="absolute inset-0 flex flex-col" style={{ background: `linear-gradient(180deg, ${C.bgTop} 0%, ${C.bgBottom} 100%)`, zIndex: 50 }}>
+      <style>{`
+        @keyframes scoreWeakPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+        .score-weak-pulse { animation: scoreWeakPulse 1.8s ease-in-out infinite; }
+      `}</style>
+      <div className="flex items-center px-4" style={{ paddingTop: "calc(16px + env(safe-area-inset-top, 0px))", paddingBottom: 12 }}>
+        <button onClick={onClose} className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: "50%", background: C.card, border: "none" }}>
+          <ChevronLeft size={17} color={C.ink} />
+        </button>
+        <span className="ft-display flex-1 text-center" style={{ fontSize: 17, fontWeight: 700, color: C.ink, marginRight: 34 }}>Nutrition Score</span>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4" style={{ paddingBottom: 32 }}>
+        <div className="p-5 mb-4 flex flex-col items-center" style={{ background: C.card, borderRadius: 24, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+          <Ring size={180} stroke={16} pct={total} trackColor={C.track} fillColor={scoreColor}>
+            <div className="flex flex-col items-center">
+              <span className="ft-display" style={{ fontSize: 40, fontWeight: 700, color: C.ink }}><AnimatedNumber value={total} /></span>
+              <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft }}>/ 100</span>
+            </div>
+          </Ring>
+          {delta !== null && (
+            <div className="anim-check-pop flex items-center gap-1 mt-3" style={{ animationDelay: ".5s", animationFillMode: "backwards" }}>
+              {delta > 0 ? <TrendingUp size={14} color={C.green} /> : delta < 0 ? <TrendingDown size={14} color={C.pink} /> : <Minus size={14} color={C.inkSoft} />}
+              <span className="ft-mono" style={{ fontSize: 13, fontWeight: 700, color: delta > 0 ? C.green : delta < 0 ? C.pink : C.inkSoft }}>
+                {delta > 0 ? "+" : ""}{delta} vs yesterday
+              </span>
+            </div>
+          )}
+          <div className="ft-body mt-2" style={{ fontSize: 13, color: C.inkSoft, textAlign: "center", lineHeight: 1.4 }}>{nutritionScore.summary}</div>
+        </div>
+
+        <div className="p-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+          <div className="ft-body mb-3" style={{ fontSize: 12, fontWeight: 700, color: C.inkSoft, letterSpacing: 0.4, textTransform: "uppercase" }}>Breakdown</div>
+          {entries.map(([key, c], i) => {
+            const isBest = key === nutritionScore.bestKey;
+            const isWorst = key === nutritionScore.worstKey && nutritionScore.worstKey !== nutritionScore.bestKey;
+            const barColor = c.score >= 80 ? C.green : c.score >= 55 ? C.tan : C.pink;
+            return (
+              <div key={key} className="mb-3.5">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.ink, textTransform: "capitalize" }}>{c.label}</span>
+                    {isBest && <Sparkles size={12} color={C.tan} />}
+                    {isWorst && <span className="ft-body score-weak-pulse" style={{ fontSize: 10.5, fontWeight: 700, color: C.pink, letterSpacing: 0.3, textTransform: "uppercase" }}>Focus area</span>}
+                  </div>
+                  <span className="ft-mono" style={{ fontSize: 12, fontWeight: 700, color: barColor }}>{Math.round(c.score)}</span>
+                </div>
+                <div style={{ position: "relative", height: 8, borderRadius: 999, background: C.track, overflow: "hidden", boxShadow: isBest ? `0 0 10px ${barColor}99` : "none", transition: "box-shadow .4s ease" }}>
+                  <div style={{
+                    height: "100%", borderRadius: 999, background: barColor,
+                    width: barsIn ? `${c.score}%` : "0%",
+                    transition: `width .55s cubic-bezier(.22,.9,.34,1) ${i * 0.12}s`,
+                  }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function WeightTrackerScreen({ weights, weightSeries, goalWeight, weightPace, weightProjection, onAdd, onClose, onDelete }) {
   const [inputVal, setInputVal] = useState("");
   const latest = weights.length ? [...weights].sort((a, b) => b.timestamp - a.timestamp)[0] : null;
