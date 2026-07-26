@@ -1228,11 +1228,30 @@ function MicroInteractionStyles() {
       @keyframes confettiFall { 0% { transform: translateY(-6px) rotate(0deg); opacity: 1; } 100% { transform: translateY(38px) rotate(180deg); opacity: 0; } }
       @keyframes rowHighlight { 0% { background-color: var(--flash-color, rgba(238,108,55,0.18)); } 100% { background-color: transparent; } }
       @keyframes checkPop { 0% { transform: scale(0); opacity: 0; } 50% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+      @keyframes cardFadeSlideUp { 0% { opacity: 0; transform: translateY(18px); } 100% { opacity: 1; transform: translateY(0); } }
+      @keyframes cardScaleIn { 0% { opacity: 0; transform: scale(0.94); } 100% { opacity: 1; transform: scale(1); } }
+      @keyframes dotFadeScaleIn { 0% { opacity: 0; transform: scale(0.3); } 100% { opacity: 1; transform: scale(1); } }
+      @keyframes insightSlideIn { 0% { opacity: 0; transform: translateX(-16px); } 100% { opacity: 1; transform: translateX(0); } }
+      .anim-card-in { animation: cardFadeSlideUp .5s cubic-bezier(.22,.9,.34,1) both; }
+      .anim-card-scale-in { animation: cardScaleIn .5s cubic-bezier(.22,.9,.34,1) both; }
+      .anim-dot-in { animation: dotFadeScaleIn .4s cubic-bezier(.34,1.56,.64,1) both; }
+      .anim-insight-in { animation: insightSlideIn .45s cubic-bezier(.22,.9,.34,1) both; }
+      @keyframes sheetBackdropFadeIn { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes sheetBackdropFadeOut { from { opacity: 1; } to { opacity: 0; } }
+      @keyframes sheetSlideIn { from { transform: translateY(100%); } to { transform: translateY(0); } }
+      @keyframes sheetSlideOut { from { transform: translateY(0); } to { transform: translateY(100%); } }
+      .anim-sheet-backdrop-in { animation: sheetBackdropFadeIn .25s ease both; }
+      .anim-sheet-backdrop-out { animation: sheetBackdropFadeOut .22s ease both; }
+      .anim-sheet-slide-in { animation: sheetSlideIn .34s cubic-bezier(.22,.9,.34,1) both; }
+      .anim-sheet-slide-out { animation: sheetSlideOut .22s cubic-bezier(.4,0,1,1) both; }
       .anim-celebrate { animation: celebrateSlideIn .35s cubic-bezier(.22,.9,.34,1); }
       .anim-pop { animation: celebratePop .4s cubic-bezier(.22,.9,.34,1); }
       .anim-row-flash { animation: rowHighlight 1.1s ease-out; }
       .anim-check-pop { animation: checkPop .45s cubic-bezier(.22,.9,.34,1); }
       .fab-pill { transition: transform .5s cubic-bezier(.34,1.56,.64,1), box-shadow .3s ease; }
+      @keyframes fabBreathe { 0%, 100% { transform: translateX(-50%) scale(1); } 50% { transform: translateX(-50%) scale(1.06); } }
+      .fab-breathe { animation: fabBreathe 2.4s ease-in-out infinite; }
+      .fab-option { transition: transform .38s cubic-bezier(.34,1.56,.64,1), opacity .28s ease; }
     `}</style>
   );
 }
@@ -1442,13 +1461,13 @@ function MacroPill({ icon: Icon, iconBg, iconColor, label, value, unit, pct }) {
 // Home "Water" card — a wavy fill visual (per the reference design) sized to
 // today's progress toward the water goal, with +/- controls in the header.
 // Uses the same C.blue / C.card tokens as the rest of the app (light & dark).
-function WaterWaveCard({ todayWater, goalMl, onAdd, onRemove, compact }) {
+function WaterWaveCard({ todayWater, goalMl, onAdd, onRemove, compact, animationDelay }) {
   const pct = clamp(goalMl > 0 ? (todayWater / goalMl) * 100 : 0, 0, 100);
   const fillPct = Math.max(pct, todayWater > 0 ? 6 : 0);
   const waveHeight = compact ? 90 : 130;
   const lightOnFill = pct > (compact ? 45 : 38); // once the wave covers most of the number, switch it to a light color for contrast
   return (
-    <div className={compact ? "" : "mb-4"} style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", overflow: "hidden", height: compact ? "100%" : undefined }}>
+    <div className={`${compact ? "" : "mb-4"}${animationDelay ? " anim-card-in" : ""}`} style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", overflow: "hidden", height: compact ? "100%" : undefined, animationDelay }}>
       <style>{`
         @keyframes waterWaveScroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
         .water-wave-back { animation: waterWaveScroll 9s linear infinite; }
@@ -1497,14 +1516,15 @@ function WeeklyConsistencyRow({ days, title = "This week's consistency" }) {
         <span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.inkSoft }}>{title}</span>
       </div>
       <div className="flex items-center justify-between">
-        {days.map((d) => (
+        {days.map((d, i) => (
           <div key={d.date} className="flex flex-col items-center gap-1.5" style={{ flex: 1 }}>
             <span className="ft-body" style={{ fontSize: 11, fontWeight: d.isToday ? 700 : 500, color: d.isToday ? C.ink : C.inkSoft }}>{d.weekdayLetter}</span>
-            <div style={{
+            <div className="anim-dot-in" style={{
               width: 22, height: 22, borderRadius: "50%",
               background: d.status === "pending" ? "transparent" : STATUS_COLOR[d.status],
               border: d.status === "pending" ? `2px dashed ${C.line}` : d.isToday ? `2px solid ${C.card}` : "none",
               boxShadow: d.isToday && d.status !== "pending" ? `0 0 0 2px ${STATUS_COLOR[d.status]}55` : "none",
+              animationDelay: `${i * 60}ms`,
             }} />
           </div>
         ))}
@@ -1780,6 +1800,7 @@ const handleGoogleSignIn = async () => {
   const [showAdd, setShowAdd] = useState(false);
   const [addLogType, setAddLogType] = useState("meal");
   const [fabPressed, setFabPressed] = useState(false);
+  const [fabOpen, setFabOpen] = useState(false);
   const [addMode, setAddMode] = useState("photo");
   const [logsSubTab, setLogsSubTab] = useState("meals");
   const [logsDateFilter, setLogsDateFilter] = useState(null);
@@ -2421,7 +2442,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
               const labelForOffset = (o) => (o === 0 ? "Today" : o === 1 ? "Yesterday" : fmtDate(daysAgo(o)));
               const offsets = [dashDayOffset + 1, dashDayOffset, dashDayOffset - 1];
               return (
-                <div className="flex items-center gap-1.5 mb-3 px-1">
+                <div className="flex items-center gap-1.5 mb-3 px-1 anim-card-in">
                   <button onClick={() => setDashDayOffset((o) => o + 1)} className="flex items-center justify-center flex-shrink-0" style={{ width: 26, height: 26, borderRadius: "50%", background: C.card }}><ChevronLeft size={14} color={C.ink} /></button>
                   <div className="flex-1 flex items-center gap-1.5">
                     {offsets.map((o) => {
@@ -2470,7 +2491,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
             })()}
 
             {/* Today's Status — the app's one-glance answer to "how am I doing today" */}
-            <div className="p-4 mb-4" style={{ background: viewedStatus.bg, borderRadius: 16, transition: "background .3s ease" }}>
+            <div className="p-4 mb-4 anim-card-scale-in" style={{ background: viewedStatus.bg, borderRadius: 16, transition: "background .3s ease", animationDelay: "60ms" }}>
               <div className="flex items-center justify-between">
                 <span className="ft-display" style={{ fontSize: 15.5, fontWeight: 700, color: C.ink }}>{viewedStatus.emoji} {viewedStatus.label}</span>
                 {viewedStatus.level === "achieved" && <Trophy size={17} color={viewedStatus.color} />}
@@ -2487,7 +2508,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
               )}
             </div>
 
-            <div className="p-5 mb-4" style={{ background: C.card, borderRadius: 24, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+            <div className="p-5 mb-4 anim-card-in" style={{ background: C.card, borderRadius: 24, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", animationDelay: "120ms" }}>
               <div className="flex items-center justify-between">
                 <Ring size={190} stroke={16} pct={viewedEatenPct} trackColor={C.track} fillColor={C.orange}>
                   <div className="flex flex-col items-center">
@@ -2512,19 +2533,19 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
               </div>
             </div>
 
-            <div className="flex gap-2.5 mb-2.5">
+            <div className="flex gap-2.5 mb-2.5 anim-card-in" style={{ animationDelay: "180ms" }}>
               <MacroPill icon={Dumbbell} iconBg={C.purpleTint} iconColor={C.purple} label="Protein" value={Math.round(viewedTotals.protein)} unit="g" pct={goals.protein > 0 ? (viewedTotals.protein / goals.protein) * 100 : 0} />
               <MacroPill icon={Wheat} iconBg={C.tanTint} iconColor={C.tan} label="Carbs" value={Math.round(viewedTotals.carbs)} unit="g" pct={goals.carbs > 0 ? (viewedTotals.carbs / goals.carbs) * 100 : 0} />
               <MacroPill icon={Droplet} iconBg={C.pinkTint} iconColor={C.pink} label="Fat" value={Math.round(viewedTotals.fat)} unit="g" pct={goals.fat > 0 ? (viewedTotals.fat / goals.fat) * 100 : 0} />
             </div>
-            <div className="flex gap-2.5 mb-4">
+            <div className="flex gap-2.5 mb-4 anim-card-in" style={{ animationDelay: "230ms" }}>
               <MacroPill icon={Droplets} iconBg={C.blueTint} iconColor={C.blue} label="Water" value={Math.round((viewedIsToday ? todayWater : viewedWater) / 1000 * 10) / 10} unit="L" pct={goals.water > 0 ? ((viewedIsToday ? todayWater : viewedWater) / goals.water) * 100 : 0} />
               <MacroPill icon={Dumbbell} iconBg={viewedExerciseLogs.length > 0 ? C.greenTint : isSundayDate(viewedDate) ? C.tanTint : C.greenTint} iconColor={viewedExerciseLogs.length > 0 ? C.green : isSundayDate(viewedDate) ? C.tan : C.green} label="Workout" value={viewedExerciseLogs.length > 0 ? "Done" : isSundayDate(viewedDate) ? "Holiday" : "Rest"} unit="" pct={viewedExerciseLogs.length > 0 || isSundayDate(viewedDate) ? 100 : 0} />
             </div>
 
             {!viewedIsToday ? (
               <>
-                <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+                <div className="p-4 mb-4 anim-card-in" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", animationDelay: "290ms" }}>
                   <div className="flex items-center gap-3">
                     <div style={{ width: 46, height: 46, borderRadius: "50%", background: nutritionScore.total >= 80 ? C.greenTint : nutritionScore.total >= 55 ? C.tanTint : C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                       <Gauge size={20} color={nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink} />
@@ -2538,7 +2559,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                     </div>
                   </div>
                 </div>
-                <div className="p-4 mb-6 flex items-center gap-2.5" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+                <div className="p-4 mb-6 flex items-center gap-2.5 anim-card-in" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", animationDelay: "350ms" }}>
                   <CalendarDays size={16} color={C.inkSoft} />
                   <span className="ft-body flex-1" style={{ fontSize: 12.5, color: C.inkSoft }}>Viewing {fmtDate(viewedDate)}'s log. Weight, sleep, water tracking and the AI coach only run for today.</span>
                   <button onClick={() => setDashDayOffset(0)} className="ft-body flex-shrink-0" style={{ fontSize: 12, color: C.orange, fontWeight: 600 }}>Back to today</button>
@@ -2548,7 +2569,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
               // Score / Weight / Sleep / Water — 2x2 grid of big tiles
               <div className="grid grid-cols-2 gap-3 mb-6">
                 {/* Score tile */}
-                <div className="p-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+                <div className="p-4 anim-card-in" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", animationDelay: "290ms" }}>
                   <div className="flex items-center gap-2 mb-2.5">
                     <div style={{ width: 30, height: 30, borderRadius: "50%", background: nutritionScore.total >= 80 ? C.greenTint : nutritionScore.total >= 55 ? C.tanTint : C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                       <Gauge size={15} color={nutritionScore.total >= 80 ? C.green : nutritionScore.total >= 55 ? C.tan : C.pink} />
@@ -2563,7 +2584,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                 </div>
 
                 {/* Weight tile — tap through to the full Weight History screen */}
-                <div onClick={() => setShowWeight(true)} className="p-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", cursor: "pointer" }}>
+                <div onClick={() => setShowWeight(true)} className="p-4 anim-card-in" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", cursor: "pointer", animationDelay: "340ms" }}>
                   <div className="flex items-center justify-between mb-2.5">
                     <div className="flex items-center gap-2">
                       <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -2600,7 +2621,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                     floating "Z" letters are a purely decorative background layer,
                     clipped to this card's own bounds (overflow: hidden) so the
                     animation never bleeds into neighboring tiles. */}
-                <button onClick={() => setShowSleep(true)} className="text-left p-4" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", border: "none", position: "relative", overflow: "hidden" }}>
+                <button onClick={() => setShowSleep(true)} className="text-left p-4 anim-card-in" style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", border: "none", position: "relative", overflow: "hidden", animationDelay: "390ms" }}>
                   <style>{`
                     @keyframes sleepZFloat1 { 0% { transform: translate(0px, 6px) rotate(-4deg); opacity: 0; } 12% { opacity: 0.5; } 50% { transform: translate(10px, -30px) rotate(6deg); } 88% { opacity: 0.15; } 100% { transform: translate(-6px, -66px) rotate(-3deg); opacity: 0; } }
                     @keyframes sleepZFloat2 { 0% { transform: translate(0px, 6px) rotate(3deg); opacity: 0; } 15% { opacity: 0.55; } 50% { transform: translate(-9px, -28px) rotate(-7deg); } 85% { opacity: 0.15; } 100% { transform: translate(7px, -62px) rotate(4deg); opacity: 0; } }
@@ -2638,12 +2659,12 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                 </button>
 
                 {/* Water tile — keeps the animated wave fill */}
-                <WaterWaveCard compact todayWater={todayWater} goalMl={goals.water} onAdd={() => addWater(250)} onRemove={removeLastWater} />
+                <WaterWaveCard compact todayWater={todayWater} goalMl={goals.water} onAdd={() => addWater(250)} onRemove={removeLastWater} animationDelay="440ms" />
               </div>
             )}
 
             {viewedIsToday && (
-            <div className="p-4 mb-6" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
+            <div className="p-4 mb-6 anim-card-in" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", animationDelay: "490ms" }}>
               <div className="flex items-center gap-2 mb-2.5">
                 <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.purpleTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <Brain size={15} color={C.purple} />
@@ -2840,7 +2861,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
             {insights.length > 0 && (
               <div className="flex flex-col gap-2 mb-4">
                 {insights.map((ins, i) => (
-                  <div key={i} className="flex items-start gap-2.5 p-3" style={{ background: ins.bg, borderRadius: 16 }}>
+                  <div key={i} className="flex items-start gap-2.5 p-3 anim-insight-in" style={{ background: ins.bg, borderRadius: 16, animationDelay: `${i * 90}ms` }}>
                     <div style={{ marginTop: 1, flexShrink: 0 }}><ins.icon size={15} color={ins.color} /></div>
                     <span className="ft-body" style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.4 }}>{ins.text}</span>
                   </div>
@@ -3124,6 +3145,23 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
 
       </div>
 
+      {/* Dimmed, blurred backdrop behind the fan — also closes it on tap.
+          Always mounted (not conditionally added) so it fades in/out smoothly
+          instead of popping, mirroring the fan buttons' own transition. */}
+      <div
+        onClick={() => setFabOpen(false)}
+        className="absolute inset-0"
+        style={{
+          zIndex: 35,
+          background: "rgba(10,10,14,0.45)",
+          backdropFilter: "blur(6px)",
+          WebkitBackdropFilter: "blur(6px)",
+          opacity: fabOpen ? 1 : 0,
+          pointerEvents: fabOpen ? "auto" : "none",
+          transition: "opacity .3s ease",
+        }}
+      />
+
       <div className="absolute left-4 right-4 flex items-center" style={{
         background: C.card, borderRadius: 30, height: 64,
         bottom: "calc(10px + env(safe-area-inset-bottom, 0px))",
@@ -3135,26 +3173,67 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
         <NavBtn active={tab === "charts"} onClick={() => setTab("charts")} icon={BarChart3} label="Insights" />
         <NavBtn active={tab === "profile"} onClick={() => setTab("profile")} icon={User} label="Profile" />
       </div>
+
+      {/* Fan-out quick actions — Meal / Exercise, side by side just above the
+          FAB. Always mounted so the close animation can reverse smoothly
+          instead of just vanishing; each button's own opacity/transform is
+          driven by fabOpen, with a slight stagger between the two. */}
+      <div className="absolute flex items-center gap-3" style={{
+        left: "50%",
+        bottom: "calc(112px + env(safe-area-inset-bottom, 0px))",
+        transform: "translateX(-50%)",
+        pointerEvents: fabOpen ? "auto" : "none",
+        zIndex: 45,
+      }}>
+        {[
+          { key: "meal", icon: Utensils, label: "Meal", color: C.orange, bg: C.orangeTint, onSelect: () => openAdd("meal", "photo") },
+          { key: "exercise", icon: Dumbbell, label: "Exercise", color: C.blue, bg: C.blueTint, onSelect: () => openAdd("exercise", "photo") },
+        ].map((opt, i) => (
+          <button
+            key={opt.key}
+            onClick={() => { opt.onSelect(); setFabOpen(false); }}
+            className="flex items-center gap-2 ft-body fab-option"
+            style={{
+              transform: fabOpen ? "translateY(0) scale(1)" : "translateY(18px) scale(0.6)",
+              opacity: fabOpen ? 1 : 0,
+              transitionDelay: fabOpen ? `${i * 70}ms` : `${(1 - i) * 40}ms`,
+              background: C.card, borderRadius: 999, padding: "10px 18px 10px 8px",
+              boxShadow: "0 8px 20px rgba(20,20,20,0.18)",
+              border: "none", whiteSpace: "nowrap",
+            }}>
+            <span style={{ width: 32, height: 32, borderRadius: "50%", background: opt.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <opt.icon size={15} color={opt.color} />
+            </span>
+            <span className="ft-body" style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{opt.label}</span>
+          </button>
+        ))}
+      </div>
+
       <button
-        onClick={() => openAdd("meal", "photo")}
+        onClick={() => setFabOpen((o) => !o)}
         onPointerDown={() => setFabPressed(true)}
         onPointerUp={() => setFabPressed(false)}
         onPointerLeave={() => setFabPressed(false)}
         onPointerCancel={() => setFabPressed(false)}
-        className="absolute flex items-center justify-center fab-pill"
+        className={`absolute flex items-center justify-center fab-pill${!fabOpen && !fabPressed ? " fab-breathe" : ""}`}
         style={{
           left: "50%",
-          transform: fabPressed ? "translateX(-50%) translateY(-8px) scale(1.1)" : "translateX(-50%)",
+          transform: fabOpen
+            ? "translateX(-50%) rotate(45deg)"
+            : fabPressed
+              ? "translateX(-50%) translateY(-8px) scale(1.1)"
+              : "translateX(-50%)",
           bottom: "calc(46px + env(safe-area-inset-bottom, 0px))",
           width: 52, height: 52, borderRadius: "50%",
           background: `linear-gradient(135deg, ${C.orange}, ${C.orangeDeep})`,
-          boxShadow: fabPressed
+          boxShadow: fabPressed || fabOpen
             ? "0 16px 30px rgba(238,108,55,0.48), 0 4px 12px rgba(238,108,55,0.36)"
             : "0 8px 18px rgba(238,108,55,0.4), 0 2px 6px rgba(238,108,55,0.3)",
-          border: "none",
+          border: "none", zIndex: 46,
         }}>
         <Plus size={24} color="#fff" strokeWidth={2.4} />
       </button>
+
 
       {showAdd && (
         <AddLogSheet
@@ -3208,12 +3287,21 @@ function AddLogSheet({ initialLogType, initialMode, goals, todayTotals, todayLog
   const [logType, setLogType] = useState(initialLogType);
   const isEditing = !!editingEntry;
 
+  // Closing is driven locally so the sheet can slide back down / the
+  // backdrop can fade out before the parent actually unmounts it, instead of
+  // the whole thing just vanishing.
+  const [closing, setClosing] = useState(false);
+  function requestClose() {
+    setClosing(true);
+    setTimeout(onClose, 220);
+  }
+
   return (
-    <div className="absolute inset-0 flex flex-col justify-end" style={{ background: "rgba(21,23,27,0.4)" }} onClick={onClose}>
-      <div className="flex flex-col" style={{ background: C.bgBottom, borderRadius: "24px 24px 0 0", maxHeight: "90%", boxShadow: "0 -8px 30px rgba(0,0,0,0.2)" }} onClick={(e) => e.stopPropagation()}>
+    <div className={`absolute inset-0 flex flex-col justify-end ${closing ? "anim-sheet-backdrop-out" : "anim-sheet-backdrop-in"}`} style={{ background: "rgba(21,23,27,0.4)", zIndex: 50 }} onClick={requestClose}>
+      <div className={`flex flex-col ${closing ? "anim-sheet-slide-out" : "anim-sheet-slide-in"}`} style={{ background: C.bgBottom, borderRadius: "24px 24px 0 0", maxHeight: "90%", boxShadow: "0 -8px 30px rgba(0,0,0,0.2)" }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 pt-4 pb-2">
           <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>{isEditing ? (logType === "meal" ? "Edit meal" : "Edit workout") : "Add a log"}</span>
-          <button onClick={onClose} style={{ width: 30, height: 30, borderRadius: "50%", background: C.card, display: "flex", alignItems: "center", justifyContent: "center" }}><X size={15} color={C.ink} /></button>
+          <button onClick={requestClose} style={{ width: 30, height: 30, borderRadius: "50%", background: C.card, display: "flex", alignItems: "center", justifyContent: "center" }}><X size={15} color={C.ink} /></button>
         </div>
         {!isEditing && (
           <div className="px-5 pt-1 pb-2">
