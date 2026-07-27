@@ -1866,9 +1866,29 @@ function MacroPill({ icon: Icon, iconBg, iconColor, label, value, unit, pct }) {
 function WaterWaveCard({ todayWater, goalMl, onAdd, onRemove, compact, animationDelay }) {
   const pct = clamp(goalMl > 0 ? (todayWater / goalMl) * 100 : 0, 0, 100);
   const fillPct = Math.max(pct, todayWater > 0 ? 6 : 0);
-  const waveHeight = compact ? 90 : 130;
+  const waveHeight = compact ? 90 : 130; // baseline used for the drop-fall distance; the wave area itself now stretches to fill whatever height the card actually is
   const lightOnFill = pct > (compact ? 45 : 38); // once the wave covers most of the number, switch it to a light color for contrast
 
+  // The wave section's real rendered height can be taller than `waveHeight`
+  // when this card sits in a stretched CSS-grid row (e.g. next to a taller
+  // Sleep/Score tile) — grid stretch makes the outer card taller, and without
+  // this the fixed-height wave block would leave a gap of bare card
+  // background between the water and the rounded bottom corner. Measuring
+  // the actual height keeps the falling-drop animation landing at the real
+  // water surface instead of stopping short.
+  const waveRef = useRef(null);
+  const [measuredWaveHeight, setMeasuredWaveHeight] = useState(waveHeight);
+  useEffect(() => {
+    const el = waveRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect?.height;
+      if (h) setMeasuredWaveHeight(h);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const dropFallDistance = Math.max(measuredWaveHeight, waveHeight) - 6;
 
   // Signature "add water" animation: every time todayWater increases (a +250ml
   // tap), spawn a droplet that falls from the top of the card into the
@@ -1903,7 +1923,7 @@ function WaterWaveCard({ todayWater, goalMl, onAdd, onRemove, compact, animation
   }, [todayWater, goalMl]);
 
   return (
-    <div className={`${compact ? "" : "mb-4"}${animationDelay ? " anim-card-in" : ""}`} style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", overflow: "hidden", height: compact ? "100%" : undefined, animationDelay }}>
+    <div className={`${compact ? "" : "mb-4"}${animationDelay ? " anim-card-in" : ""}`} style={{ background: C.card, borderRadius: 20, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", overflow: "hidden", height: compact ? "100%" : undefined, display: compact ? "flex" : undefined, flexDirection: compact ? "column" : undefined, animationDelay }}>
       <style>{`
         @keyframes waterWaveScroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
         .water-wave-back { animation: waterWaveScroll 9s linear infinite; }
@@ -1912,7 +1932,7 @@ function WaterWaveCard({ todayWater, goalMl, onAdd, onRemove, compact, animation
           0% { transform: translateY(-16px) scale(0.5); opacity: 0; }
           18% { opacity: 1; transform: translateY(0px) scale(1); }
           78% { opacity: 1; }
-          100% { transform: translateY(${waveHeight - 6}px) scale(0.5); opacity: 0; }
+          100% { transform: translateY(${dropFallDistance}px) scale(0.5); opacity: 0; }
         }
         .water-drop-fall { animation: waterDropFall 0.6s cubic-bezier(.55,0,.85,.35) forwards; }
         @keyframes waterRippleSurface {
@@ -1934,7 +1954,7 @@ function WaterWaveCard({ todayWater, goalMl, onAdd, onRemove, compact, animation
         }
         .water-goal-shine-overlay { animation: waterGoalShine 1.3s ease; }
       `}</style>
-      <div className={compact ? "flex items-center justify-between p-4 pb-2" : "flex items-center justify-between p-4 pb-3"}>
+      <div className={compact ? "flex items-center justify-between p-4 pb-2" : "flex items-center justify-between p-4 pb-3"} style={compact ? { flexShrink: 0 } : undefined}>
         <div className="flex items-center gap-2">
           <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.blueTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <Droplets size={15} color={C.blue} />
@@ -1946,7 +1966,9 @@ function WaterWaveCard({ todayWater, goalMl, onAdd, onRemove, compact, animation
           <button onClick={onAdd} className="flex items-center justify-center" style={{ width: compact ? 22 : 30, height: compact ? 22 : 30, borderRadius: "50%", background: C.blueTint, border: "none", flexShrink: 0 }}><Plus size={compact ? 10 : 14} color={C.blue} /></button>
         </div>
       </div>
-      <div className={justAchieved ? "water-goal-pulse" : ""} style={{ position: "relative", height: waveHeight, overflow: "hidden" }}>
+      <div ref={waveRef} className={justAchieved ? "water-goal-pulse" : ""} style={compact
+        ? { position: "relative", flex: 1, minHeight: waveHeight, overflow: "hidden" }
+        : { position: "relative", height: waveHeight, overflow: "hidden" }}>
         <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: `${fillPct}%`, background: C.blue, transition: "height .6s ease" }}>
           {/* Landing ripple(s) — one per drop, anchored to the water surface
               (the top edge of this fill div), so it tracks the rising level
@@ -4574,6 +4596,13 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   }
 
   function updateField(key, value) { setPending((p) => ({ ...p, [key]: key === "food_name" || key === "estimated_portion" ? value : num(value) })); }
+  function updateItemField(i, key, value) {
+    setPending((p) => {
+      const items = [...(p.items || [])];
+      items[i] = { ...items[i], [key]: value };
+      return { ...p, items };
+    });
+  }
 
   async function recalculateFromPortion() {
     if (!pending || !pending.food_name) { setError("Give the meal a name first."); return; }
@@ -4926,11 +4955,13 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between gap-2">
-                                <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.food_name}</span>
+                                <input value={it.food_name} onChange={(e) => updateItemField(i, "food_name", e.target.value)} onClick={(e) => e.stopPropagation()}
+                                  className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink, background: "transparent", border: "none", outline: "none", padding: 0, minWidth: 0, flex: 1 }} />
                                 <span className="ft-mono flex-shrink-0" style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>{Math.round(it.calories)} kcal</span>
                               </div>
                               <div className="flex items-center justify-between gap-2 mt-0.5">
-                                <span className="ft-body" style={{ fontSize: 11, color: C.inkSoft }}>{it.estimated_portion || ""}</span>
+                                <input value={it.estimated_portion || ""} onChange={(e) => updateItemField(i, "estimated_portion", e.target.value)} onClick={(e) => e.stopPropagation()}
+                                  placeholder="portion" className="ft-body" style={{ fontSize: 11, color: C.inkSoft, background: "transparent", border: "none", outline: "none", padding: 0, minWidth: 0, flex: 1 }} />
                                 <span className="ft-mono flex-shrink-0" style={{ fontSize: 11, color: C.inkSoft }}>P{Math.round(it.protein_g)} C{Math.round(it.carbs_g)} F{Math.round(it.fat_g)}</span>
                               </div>
                             </div>
