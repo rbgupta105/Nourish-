@@ -19,7 +19,7 @@ import {
   Flame, Trophy, Dumbbell, Wheat, Droplet, AlertCircle, Home, Activity, Sparkles,
   Star, Pencil, Copy, Droplets, ChevronLeft, ChevronRight, ChevronDown, CalendarDays, Gauge,
   Bell, Award, Layers, Brain, Lightbulb, Mic, ScanBarcode, ThumbsUp, ThumbsDown,
-  Moon, BedDouble, AlarmClock, Sunrise, Scale
+  Moon, BedDouble, AlarmClock, Sunrise, Scale, Leaf
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis,
@@ -1288,8 +1288,14 @@ function MicroInteractionStyles() {
       @keyframes rowSlideIn { 0% { transform: translateY(-14px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }
       .anim-row-slide-in { animation: rowSlideIn .38s cubic-bezier(.22,.9,.34,1); }
       .anim-check-pop { animation: checkPop .45s cubic-bezier(.22,.9,.34,1); }
+      @keyframes iconLiftBounce { 0% { transform: translateY(0); } 35% { transform: translateY(-7px); } 60% { transform: translateY(1px); } 100% { transform: translateY(0); } }
+      .anim-icon-lift { animation: iconLiftBounce .55s cubic-bezier(.34,1.56,.64,1) .1s both; }
+      @keyframes iconDropBounce { 0% { transform: translateY(-10px); opacity: 0; } 55% { transform: translateY(2px); opacity: 1; } 80% { transform: translateY(-1px); } 100% { transform: translateY(0); } }
+      .anim-icon-drop { animation: iconDropBounce .5s cubic-bezier(.34,1.56,.64,1) .05s both; }
+      @keyframes prBadgePop { 0% { transform: scale(0.3); opacity: 0; } 60% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+      .anim-pr-badge { animation: prBadgePop .5s cubic-bezier(.22,.9,.34,1) .3s both; }
       .fab-pill { transition: transform .5s cubic-bezier(.34,1.56,.64,1), box-shadow .3s ease; }
-      @keyframes fabBreathe { 0%, 100% { transform: translateX(-50%) scale(1); } 50% { transform: translateX(-50%) scale(1.06); } }
+      @keyframes fabBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
       .fab-breathe { animation: fabBreathe 2.4s ease-in-out infinite; }
       .fab-option { transition: transform .38s cubic-bezier(.34,1.56,.64,1), opacity .28s ease; }
     `}</style>
@@ -1306,7 +1312,7 @@ function MicroPulse({ pulse }) {
   return (
     <div className="absolute inset-0 flex items-center justify-center pointer-events-none" style={{ zIndex: 60 }}>
       <div className="anim-pop flex items-center justify-center" style={{ width: 64, height: 64, borderRadius: "50%", background: pulse.bg, boxShadow: "0 8px 24px rgba(20,20,20,0.18)", position: "relative" }}>
-        <Icon size={28} color={pulse.color} />
+        <Icon size={28} color={pulse.color} className={pulse.kind === "workout" ? "anim-icon-lift" : pulse.kind === "weight" ? "anim-icon-drop" : ""} />
         <div className="anim-check-pop flex items-center justify-center" style={{
           position: "absolute", right: -3, bottom: -3, width: 24, height: 24, borderRadius: "50%",
           background: C.green, border: `2px solid ${C.bgBottom}`,
@@ -1347,12 +1353,35 @@ function CelebrationBanner({ celebrations, onDismiss }) {
 // Bottom-anchored toast with an Undo action, shown briefly after a delete.
 // Mirrors CelebrationBanner's overlay pattern (rounded card, floating above
 // the content) but anchored above the bottom nav instead of at the top.
+// Kept mounted a beat past `toast` clearing so it can slide back down
+// instead of just vanishing — mirrors the deleted row's own animation, so
+// the whole delete/undo flow reads as one consistent motion.
 function UndoToast({ toast, onUndo }) {
-  if (!toast) return null;
+  const [mountedToast, setMountedToast] = useState(null);
+  const [leaving, setLeaving] = useState(false);
+  const leaveTimerRef = useRef(null);
+  useEffect(() => {
+    if (toast) {
+      if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
+      setMountedToast(toast);
+      setLeaving(false);
+    } else {
+      setLeaving(true);
+      leaveTimerRef.current = setTimeout(() => setMountedToast(null), 220);
+    }
+    return () => clearTimeout(leaveTimerRef.current);
+  }, [toast]);
+  if (!mountedToast) return null;
   return (
     <div className="absolute left-4 right-4 flex items-center justify-between gap-3 px-4 py-3.5"
-      style={{ bottom: "calc(84px + env(safe-area-inset-bottom, 0px))", background: C.ink, borderRadius: 16, boxShadow: "0 8px 24px rgba(20,20,20,0.24)", zIndex: 60 }}>
-      <span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.onInk }}>{toast.message}</span>
+      style={{
+        bottom: "calc(84px + env(safe-area-inset-bottom, 0px))", background: C.ink, borderRadius: 16,
+        boxShadow: "0 8px 24px rgba(20,20,20,0.24)", zIndex: 60,
+        transform: leaving ? "translateY(16px)" : "translateY(0)",
+        opacity: leaving ? 0 : 1,
+        transition: leaving ? "transform .2s ease, opacity .2s ease" : "transform .32s cubic-bezier(.34,1.4,.64,1), opacity .22s ease",
+      }}>
+      <span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.onInk }}>{mountedToast.message}</span>
       <button onClick={onUndo} className="ft-body flex-shrink-0" style={{ fontSize: 13, fontWeight: 700, color: C.orange }}>Undo</button>
     </div>
   );
@@ -1430,6 +1459,27 @@ function PortionBadge({ verdict, percent }) {
       <span className="ft-body" style={{ fontSize: 12, fontWeight: 600, color: m.color }}>{m.label}{pct !== 0 ? ` · ${pct > 0 ? "+" : ""}${pct}%` : ""}</span>
     </div>
   );
+}
+
+// Custom Recharts <Line> dot renderer: every point stays a small plain dot
+// except the most recent one, which pops to a larger radius — but only once
+// the chart's one-time entrance animation has finished (`expand`), so the
+// line finishes drawing before the "selected" point calls attention to itself.
+function makeExpandingLastDot(dataLength, expand, color) {
+  return function ExpandingLastDot(props) {
+    const { cx, cy, index } = props;
+    if (cx == null || cy == null) return null;
+    const isLast = index === dataLength - 1;
+    return (
+      <circle
+        key={`dot-${index}`}
+        cx={cx} cy={cy}
+        r={isLast && expand ? 6 : 3}
+        fill={color}
+        style={isLast ? { transition: "r .45s cubic-bezier(.34,1.56,.64,1)" } : undefined}
+      />
+    );
+  };
 }
 
 // Animates a number counting up from 0 to `value` over `duration` ms, but
@@ -1930,12 +1980,24 @@ function Chip({ active, onClick, label }) {
 function SwipeRow({ children, onEdit, onDuplicate, onDelete, actionWidth = 132 }) {
   const [dragX, setDragX] = useState(0);
   const [open, setOpen] = useState(false);
+  // "removing" plays a shrink+slide-out before the item is actually dropped
+  // from the underlying list — otherwise the row would just vanish and the
+  // rows below it would snap upward instantly. The outer grid-rows collapse
+  // (1fr -> 0fr) animates the height closed without needing to know the
+  // row's actual pixel height in advance (works the same for meal rows,
+  // exercise rows, compact or not).
+  const [removing, setRemoving] = useState(false);
   const dragStartX = useRef(null);
   const draggingRef = useRef(false);
   const longPressTimer = useRef(null);
 
   function openActions() { setDragX(-actionWidth); setOpen(true); }
   function closeActions() { setDragX(0); setOpen(false); }
+  function triggerDelete() {
+    closeActions();
+    setRemoving(true);
+    setTimeout(() => { onDelete && onDelete(); }, 260);
+  }
 
   function onTouchStart(e) {
     dragStartX.current = e.touches[0].clientX;
@@ -1959,24 +2021,33 @@ function SwipeRow({ children, onEdit, onDuplicate, onDelete, actionWidth = 132 }
   }
 
   return (
-    <div className="relative" style={{ overflow: "hidden", borderRadius: 16 }}>
-      <div className="absolute inset-y-0 right-0 flex items-stretch" style={{ width: actionWidth }}>
-        {onEdit && (
-          <button onClick={() => { closeActions(); onEdit(); }} className="flex-1 flex items-center justify-center" style={{ background: C.blue }}><Pencil size={15} color="#fff" /></button>
-        )}
-        {onDuplicate && (
-          <button onClick={() => { closeActions(); onDuplicate(); }} className="flex-1 flex items-center justify-center" style={{ background: C.tan }}><Copy size={15} color="#fff" /></button>
-        )}
-        {onDelete && (
-          <button onClick={() => { closeActions(); onDelete(); }} className="flex-1 flex items-center justify-center" style={{ background: C.pink }}><Trash2 size={15} color="#fff" /></button>
-        )}
-      </div>
-      <div
-        onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
-        onClick={() => { if (open) closeActions(); }}
-        style={{ transform: `translateX(${dragX}px)`, transition: dragStartX.current == null ? "transform .25s cubic-bezier(.22,.9,.34,1)" : "none", touchAction: "pan-y" }}
-      >
-        {children}
+    <div style={{ display: "grid", gridTemplateRows: removing ? "0fr" : "1fr", transition: "grid-template-rows .26s cubic-bezier(.4,0,.6,1)" }}>
+      <div style={{ overflow: "hidden", minHeight: 0 }}>
+        <div className="relative" style={{
+          overflow: "hidden", borderRadius: 16,
+          opacity: removing ? 0 : 1,
+          transform: removing ? "translateX(-70px) scale(0.92)" : "translateX(0) scale(1)",
+          transition: "opacity .22s ease, transform .26s cubic-bezier(.4,0,.6,1)",
+        }}>
+          <div className="absolute inset-y-0 right-0 flex items-stretch" style={{ width: actionWidth }}>
+            {onEdit && (
+              <button onClick={() => { closeActions(); onEdit(); }} className="flex-1 flex items-center justify-center" style={{ background: C.blue }}><Pencil size={15} color="#fff" /></button>
+            )}
+            {onDuplicate && (
+              <button onClick={() => { closeActions(); onDuplicate(); }} className="flex-1 flex items-center justify-center" style={{ background: C.tan }}><Copy size={15} color="#fff" /></button>
+            )}
+            {onDelete && (
+              <button onClick={triggerDelete} className="flex-1 flex items-center justify-center" style={{ background: C.pink }}><Trash2 size={15} color="#fff" /></button>
+            )}
+          </div>
+          <div
+            onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+            onClick={() => { if (open) closeActions(); }}
+            style={{ transform: `translateX(${dragX}px)`, transition: dragStartX.current == null ? "transform .25s cubic-bezier(.22,.9,.34,1)" : "none", touchAction: "pan-y" }}
+          >
+            {children}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -2178,6 +2249,16 @@ const handleGoogleSignIn = async () => {
   const [chartsSubTab, setChartsSubTab] = useState("nutrition");
   const [nutritionChartMetric, setNutritionChartMetric] = useState("calories");
   const [chartsPeriod, setChartsPeriod] = useState("week");
+  // Charts should draw in once when the Insights tab (or a sub-tab within it)
+  // is freshly opened, then hold still — switching the macro metric or any
+  // other unrelated re-render must NOT replay the animation.
+  const [chartsSettled, setChartsSettled] = useState(false);
+  useEffect(() => {
+    if (tab !== "charts") return;
+    setChartsSettled(false);
+    const t = setTimeout(() => setChartsSettled(true), 700);
+    return () => clearTimeout(t);
+  }, [tab, chartsSubTab]);
 
   const [profile, setProfile] = useState({ name: "" });
   const [goals, setGoals] = useState({ calories: 2000, protein: 120, carbs: 220, fat: 65, fiber: 28, water: 2000, sleep: 480, targetWeight: 0, dietType: "", cuisine: "" });
@@ -2233,6 +2314,10 @@ const handleGoogleSignIn = async () => {
   const swipeStart = useRef(null); // { x, y } — tracked independently of the vertical pull gesture
   const [pullDistance, setPullDistance] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  // Briefly true right after a successful pull-to-refresh, so a checkmark
+  // can flash before the indicator collapses — a beat of confirmation
+  // rather than the spinner just vanishing.
+  const [refreshSuccess, setRefreshSuccess] = useState(false);
 
   // ---------- Undo toast ----------
   // Small safety net for deletes: keep the removed item around briefly so a
@@ -2253,6 +2338,39 @@ const handleGoogleSignIn = async () => {
   // Which day the Home dashboard is showing: 0 = today, 1 = yesterday, etc.
   // Swiping left/right between days is Home-only and read-only for past days.
   const [dashDayOffset, setDashDayOffset] = useState(0);
+
+  // ---------- Home day-swipe slide transition ----------
+  // Purely visual choreography around the (still instant) dashDayOffset
+  // swap: the current content slides out in the swipe direction, THEN the
+  // data changes and the new content slides in from the opposite side —
+  // rather than the content just jumping to new numbers in place. The date
+  // header lives inside the same sliding block, so it moves with the
+  // content. Phases: "out" (exit playing) -> "jump" (data just swapped,
+  // new content instantly placed off-screen, no transition) -> "in"
+  // (entrance playing) -> null (settled).
+  const [dayTransition, setDayTransition] = useState(null); // { dir: "left"|"right", phase: "out"|"jump"|"in" } | null
+  const dayTransitionTimers = useRef([]);
+  useEffect(() => () => dayTransitionTimers.current.forEach(clearTimeout), []);
+  function animateDayChange(newOffset, dir) {
+    if (newOffset === dashDayOffset || newOffset < 0) return;
+    dayTransitionTimers.current.forEach(clearTimeout);
+    dayTransitionTimers.current = [];
+    setDayTransition({ dir, phase: "out" });
+    dayTransitionTimers.current.push(setTimeout(() => {
+      setDashDayOffset(newOffset);
+      setDayTransition({ dir, phase: "jump" });
+      requestAnimationFrame(() => requestAnimationFrame(() => setDayTransition({ dir, phase: "in" })));
+      dayTransitionTimers.current.push(setTimeout(() => setDayTransition(null), 260));
+    }, 190));
+  }
+  function dayTransitionStyle() {
+    if (!dayTransition) return { transform: "translateX(0)", opacity: 1, transition: "transform .22s cubic-bezier(.22,.9,.34,1), opacity .2s ease" };
+    const sign = dayTransition.dir === "left" ? -1 : 1;
+    if (dayTransition.phase === "out") return { transform: `translateX(${sign * 22}%)`, opacity: 0, transition: "transform .19s ease, opacity .19s ease" };
+    if (dayTransition.phase === "jump") return { transform: `translateX(${-sign * 22}%)`, opacity: 0, transition: "none" };
+    return { transform: "translateX(0)", opacity: 1, transition: "transform .22s cubic-bezier(.22,.9,.34,1), opacity .2s ease" }; // "in"
+  }
+
   const onPullTouchStart = (e) => {
     pullStartY.current = scrollRef.current && scrollRef.current.scrollTop === 0 && !refreshing ? e.touches[0].clientY : null;
     swipeStart.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
@@ -2270,7 +2388,8 @@ const handleGoogleSignIn = async () => {
         const dy = touch.clientY - swipeStart.current.y;
         if (Math.abs(dx) > 56 && Math.abs(dx) > Math.abs(dy) * 1.5) {
           haptic("light");
-          setDashDayOffset((o) => (dx < 0 ? o + 1 : Math.max(o - 1, 0)));
+          if (dx < 0) animateDayChange(dashDayOffset + 1, "left");
+          else if (dashDayOffset > 0) animateDayChange(Math.max(dashDayOffset - 1, 0), "right");
         }
       }
     }
@@ -2282,6 +2401,10 @@ const handleGoogleSignIn = async () => {
       haptic("light");
       await loadAll();
       setRefreshing(false);
+      setRefreshSuccess(true);
+      haptic("success");
+      setTimeout(() => { setRefreshSuccess(false); setPullDistance(0); }, 550);
+      return;
     }
     setPullDistance(0);
   };
@@ -2384,7 +2507,10 @@ const handleGoogleSignIn = async () => {
     const removed = logs.find((l) => l.id === id);
     await persistLogs(logs.filter((l) => l.id !== id));
     if (removed) {
-      showUndoToast("Meal deleted", () => persistLogs([removed, ...logsRef.current.filter((l) => l.id !== id)]));
+      showUndoToast("Meal deleted", async () => {
+        await persistLogs([removed, ...logsRef.current.filter((l) => l.id !== id)]);
+        setJustAddedId(removed.id); setTimeout(() => setJustAddedId(null), 1200);
+      });
     }
   }
   async function deleteExercise(id) {
@@ -2392,7 +2518,10 @@ const handleGoogleSignIn = async () => {
     const removed = exerciseLogs.find((e) => e.id === id);
     await persistExercise(exerciseLogs.filter((e) => e.id !== id));
     if (removed) {
-      showUndoToast("Exercise deleted", () => persistExercise([removed, ...exerciseLogsRef.current.filter((e) => e.id !== id)]));
+      showUndoToast("Exercise deleted", async () => {
+        await persistExercise([removed, ...exerciseLogsRef.current.filter((e) => e.id !== id)]);
+        setJustAddedId(removed.id); setTimeout(() => setJustAddedId(null), 1200);
+      });
     }
   }
 
@@ -2480,12 +2609,12 @@ const handleGoogleSignIn = async () => {
   function firePulse(kind) {
     const defs = {
       meal: { icon: Utensils, color: C.orange, bg: C.orangeTint },
-      weight: { icon: TrendingUp, color: C.blue, bg: C.blueTint },
+      weight: { icon: Scale, color: C.blue, bg: C.blueTint },
       workout: { icon: Dumbbell, color: C.blue, bg: C.blueTint },
       sleep: { icon: Moon, color: C.purple, bg: C.purpleTint },
     };
     clearTimeout(pulseTimerRef.current);
-    setPulse(defs[kind] || defs.meal);
+    setPulse({ ...(defs[kind] || defs.meal), kind });
     pulseTimerRef.current = setTimeout(() => setPulse(null), 850);
   }
   const [celebrations, setCelebrations] = useState([]);
@@ -2769,10 +2898,26 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
             <div ref={scrollRef} onTouchStart={onPullTouchStart} onTouchMove={onPullTouchMove} onTouchEnd={onPullTouchEnd}
               className="flex-1 overflow-y-auto px-4 pt-5" style={{ paddingBottom: 90 }}>
 
-              {(pullDistance > 0 || refreshing) && (
-                <div className="flex items-center justify-center" style={{ height: refreshing ? 40 : pullDistance, transition: refreshing ? "height .2s ease" : "none", overflow: "hidden" }}>
-                  <Loader2 size={18} color={C.orange} className={refreshing || pullDistance > PULL_THRESHOLD ? "animate-spin" : ""}
-                    style={{ transform: refreshing ? undefined : `rotate(${pullDistance * 3}deg)`, opacity: Math.min(1, pullDistance / PULL_THRESHOLD) }} />
+              {(pullDistance > 0 || refreshing || refreshSuccess) && (
+                <div className="flex items-center justify-center" style={{ height: refreshing || refreshSuccess ? 40 : pullDistance, transition: refreshing || refreshSuccess ? "height .2s ease" : "none", overflow: "hidden" }}>
+                  <div className="flex items-center justify-center" style={{
+                    width: 30, height: 30, borderRadius: "50%",
+                    background: refreshSuccess ? C.greenTint : pullDistance > PULL_THRESHOLD || refreshing ? C.orangeTint : C.card,
+                    transition: "background .2s ease, transform .2s cubic-bezier(.34,1.56,.64,1)",
+                    transform: pullDistance > PULL_THRESHOLD && !refreshing ? "scale(1.12)" : "scale(1)",
+                  }}>
+                    {refreshSuccess ? (
+                      <Check size={16} color={C.green} strokeWidth={3} className="anim-pop" />
+                    ) : (
+                      <Leaf size={15} color={refreshing || pullDistance > PULL_THRESHOLD ? C.orange : C.inkSoft}
+                        className={refreshing ? "animate-spin" : ""}
+                        style={{
+                          transform: refreshing ? undefined : `rotate(${Math.min(pullDistance, PULL_THRESHOLD * 1.4) * 3}deg)`,
+                          opacity: Math.min(1, pullDistance / (PULL_THRESHOLD * 0.6)),
+                          transition: "transform .1s linear",
+                        }} />
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -2819,6 +2964,13 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
 
         {tab === "home" && (
           <>
+            {/* Sliding day content — date header, status, ring, macro pills,
+                and the Score/Weight/Sleep/Water tiles all live inside this
+                one block so they move together as a single unit during the
+                day-swipe transition (AI Daily Coach below is intentionally
+                outside it — it's today-only and unrelated to which day is
+                being viewed). */}
+            <div style={dayTransitionStyle()}>
             {/* Date slider — swipe left/right anywhere on Home, tap the arrows, tap
                 any of the three visible dates, or tap the calendar icon to jump
                 straight to any date (no limit — goes all the way back) */}
@@ -2827,13 +2979,13 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
               const offsets = [dashDayOffset + 1, dashDayOffset, dashDayOffset - 1];
               return (
                 <div className="flex items-center gap-1.5 mb-3 px-1 anim-card-in">
-                  <button onClick={() => setDashDayOffset((o) => o + 1)} className="flex items-center justify-center flex-shrink-0" style={{ width: 26, height: 26, borderRadius: "50%", background: C.card }}><ChevronLeft size={14} color={C.ink} /></button>
+                  <button onClick={() => animateDayChange(dashDayOffset + 1, "left")} className="flex items-center justify-center flex-shrink-0" style={{ width: 26, height: 26, borderRadius: "50%", background: C.card }}><ChevronLeft size={14} color={C.ink} /></button>
                   <div className="flex-1 flex items-center gap-1.5">
                     {offsets.map((o) => {
                       const isFuture = o < 0;
                       const active = o === dashDayOffset;
                       return (
-                        <button key={o} onClick={() => !isFuture && setDashDayOffset(o)} disabled={isFuture}
+                        <button key={o} onClick={() => !isFuture && animateDayChange(o, o > dashDayOffset ? "left" : "right")} disabled={isFuture}
                           className="flex-1 ft-body" style={{
                             padding: "8px 4px", borderRadius: 12, border: "none",
                             background: active ? C.ink : C.card,
@@ -2845,7 +2997,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                       );
                     })}
                   </div>
-                  <button onClick={() => setDashDayOffset((o) => Math.max(o - 1, 0))} disabled={viewedIsToday} className="flex items-center justify-center flex-shrink-0" style={{ width: 26, height: 26, borderRadius: "50%", background: C.card, opacity: viewedIsToday ? 0.35 : 1 }}><ChevronRight size={14} color={C.ink} /></button>
+                  <button onClick={() => animateDayChange(Math.max(dashDayOffset - 1, 0), "right")} disabled={viewedIsToday} className="flex items-center justify-center flex-shrink-0" style={{ width: 26, height: 26, borderRadius: "50%", background: C.card, opacity: viewedIsToday ? 0.35 : 1 }}><ChevronRight size={14} color={C.ink} /></button>
                   <div className="relative flex items-center justify-center flex-shrink-0">
                     <button
                       onClick={() => {
@@ -2865,7 +3017,8 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                       onChange={(e) => {
                         const val = e.target.value;
                         if (!val) return;
-                        setDashDayOffset(Math.max(0, offsetFromDateStr(val)));
+                        const newOffset = Math.max(0, offsetFromDateStr(val));
+                        animateDayChange(newOffset, newOffset > dashDayOffset ? "left" : "right");
                       }}
                       style={{ position: "absolute", inset: 0, opacity: 0, pointerEvents: "none", width: 26, height: 26 }}
                     />
@@ -3063,6 +3216,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                 <WaterWaveCard compact todayWater={todayWater} goalMl={goals.water} onAdd={() => addWater(250)} onRemove={removeLastWater} animationDelay="440ms" />
               </div>
             )}
+            </div>
 
             {viewedIsToday && (
             <div className="p-4 mb-6 anim-card-in" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", animationDelay: "490ms" }}>
@@ -3176,7 +3330,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                         <Award size={14} color={C.tan} />
                         <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Personal records</span>
                       </div>
-                      <div className="flex gap-2" style={{ overflowX: "auto" }}>
+                      <div className="flex gap-2" style={{ overflowX: "auto", minWidth: 0, width: "100%" }}>
                         {Object.values(personalRecords).map((r) => (
                           <div key={r.name} className="flex-shrink-0 px-3 py-2" style={{ background: C.tanTint, borderRadius: 12, minWidth: 110 }}>
                             <div className="ft-body" style={{ fontSize: 12, color: C.ink, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 130 }}>{r.name}</div>
@@ -3189,27 +3343,30 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                   {visibleExercise.map((e) => {
                     const volume = e.type === "strength" ? e.sets.reduce((s, x) => s + num(x.weight) * num(x.reps), 0) : 0;
                     const overload = computeProgressiveOverload(e, exerciseLogs.filter((x) => x.timestamp < e.timestamp));
+                    const isNewEntry = e.id === justAddedId;
                     return (
                       <SwipeRow key={e.id} onEdit={() => openEdit("exercise", e)} onDuplicate={() => duplicateExercise(e)} onDelete={() => deleteExercise(e.id)}>
-                      <div className={"p-3.5" + (e.id === justAddedId ? " anim-row-flash anim-row-slide-in" : "")} style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                      <div className={"p-3.5" + (isNewEntry ? " anim-row-flash anim-row-slide-in" : "")} style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3 min-w-0">
                             <div style={{ width: 38, height: 38, borderRadius: "50%", background: C.blueTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                              {e.type === "strength" ? <Dumbbell size={15} color={C.blue} /> : <Activity size={15} color={C.blue} />}
+                              {e.type === "strength" ? <Dumbbell size={15} color={C.blue} className={isNewEntry ? "anim-icon-lift" : ""} /> : <Activity size={15} color={C.blue} className={isNewEntry ? "anim-icon-lift" : ""} />}
                             </div>
                             <div className="min-w-0">
                               <div className="ft-body" style={{ fontSize: 15, fontWeight: 600, color: C.ink }}>{e.name}</div>
                               <div className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>
-                                {fmtDateTime(e.timestamp)} · {e.type === "strength" ? `${e.sets.length} sets · ${Math.round(volume)} kg volume` : `${e.duration_min}min · ${e.distance_km}km`}
+                                {fmtDateTime(e.timestamp)} · {e.type === "strength"
+                                  ? <><CountUp value={e.sets.length} active={isNewEntry} /> sets · <CountUp value={Math.round(volume)} active={isNewEntry} /> kg volume</>
+                                  : <><CountUp value={e.duration_min} active={isNewEntry} />min · <CountUp value={e.distance_km} active={isNewEntry} decimals={e.distance_km % 1 !== 0 ? 1 : 0} />km</>}
                               </div>
                               {overload && overload.isPR && (
-                                <div className="flex items-center gap-1 mt-1"><Award size={11} color={C.tan} /><span className="ft-body" style={{ fontSize: 12, color: C.tan, fontWeight: 700 }}>New PR</span></div>
+                                <div className={"flex items-center gap-1 mt-1" + (isNewEntry ? " anim-pr-badge" : "")}><Award size={11} color={C.tan} /><span className="ft-body" style={{ fontSize: 12, color: C.tan, fontWeight: 700 }}>New PR</span></div>
                               )}
                               {overload && !overload.isPR && !overload.isNew && overload.deltaWeight !== 0 && (
-                                <div className="flex items-center gap-1 mt-1">
+                                <div className={"flex items-center gap-1 mt-1" + (isNewEntry ? " anim-insight-in" : "")}>
                                   {overload.deltaWeight > 0 ? <TrendingUp size={11} color={C.green} /> : <TrendingDown size={11} color={C.pink} />}
                                   <span className="ft-body" style={{ fontSize: 12, color: overload.deltaWeight > 0 ? C.green : C.pink, fontWeight: 600 }}>
-                                    {overload.deltaWeight > 0 ? "+" : ""}{Math.round(overload.deltaWeight * 10) / 10}kg top set vs last time
+                                    {overload.deltaWeight > 0 ? "+" : ""}<CountUp value={Math.round(overload.deltaWeight * 10) / 10} active={isNewEntry} decimals={1} />kg top set vs last time
                                   </span>
                                 </div>
                               )}
@@ -3217,10 +3374,10 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                           </div>
                         </div>
                         {e.ai && (
-                          <div className="mt-2.5 pt-2.5" style={{ borderTop: `1px solid ${C.line}` }}>
+                          <div className={"mt-2.5 pt-2.5" + (isNewEntry ? " anim-insight-in" : "")} style={{ borderTop: `1px solid ${C.line}` }}>
                             <div className="flex items-center justify-between mb-1.5">
                               <TrendBadge trend={e.ai.trend} />
-                              <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>~{e.ai.estimated_calories} kcal burned</span>
+                              <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>~<CountUp value={e.ai.estimated_calories} active={isNewEntry} /> kcal burned</span>
                             </div>
                             <div className="ft-body" style={{ fontSize: 12, color: C.ink, lineHeight: 1.4 }}>{e.ai.progression_suggestion}</div>
                           </div>
@@ -3302,7 +3459,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                           <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={30} />
                           <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }}
                             formatter={(value) => [`${Math.round(value)}${active.unit}`, active.label]} />
-                          <Bar dataKey={active.key} fill={active.color} radius={[3, 3, 0, 0]} isAnimationActive animationDuration={350} />
+                          <Bar dataKey={active.key} fill={active.color} radius={[3, 3, 0, 0]} isAnimationActive={!chartsSettled} animationDuration={600} animationEasing="ease-out" />
                         </BarChart>
                       </ResponsiveContainer>
                     );
@@ -3322,10 +3479,11 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                           <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={34} domain={["dataMin - 2", "dataMax + 2"]} />
                           <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
                           {goals.targetWeight > 0 && (
-                            <ReferenceLine y={goals.targetWeight} stroke={C.green} strokeDasharray="4 4" strokeWidth={1.5}
-                              label={{ value: "Goal", position: "insideTopRight", fill: C.green, fontSize: 12 }} />
+                            <ReferenceLine y={goals.targetWeight} stroke={C.green} strokeOpacity={chartsSettled ? 1 : 0} strokeDasharray="4 4" strokeWidth={1.5}
+                              style={{ transition: "stroke-opacity .5s ease" }}
+                              label={{ value: "Goal", position: "insideTopRight", fill: C.green, fontSize: 12, style: { opacity: chartsSettled ? 1 : 0, transition: "opacity .5s ease" } }} />
                           )}
-                          <Line type="monotone" dataKey="weight" stroke={C.ink} strokeWidth={2} dot={{ r: 3 }} />
+                          <Line type="monotone" dataKey="weight" stroke={C.ink} strokeWidth={2} dot={makeExpandingLastDot(weightSeries.length, chartsSettled, C.ink)} isAnimationActive={!chartsSettled} animationDuration={700} animationEasing="ease-out" />
                         </LineChart>
                       </ResponsiveContainer>
                       <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
@@ -3376,7 +3534,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                         <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} interval={2} />
                         <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={34} />
                         <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
-                        <Bar dataKey="volume" fill={C.blue} radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="volume" fill={C.blue} radius={[3, 3, 0, 0]} isAnimationActive={!chartsSettled} animationDuration={600} animationEasing="ease-out" />
                       </BarChart>
                     </ResponsiveContainer>
                   )}
@@ -3390,7 +3548,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                         <XAxis dataKey="date" tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} interval={2} />
                         <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={30} />
                         <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
-                        <Bar dataKey="burned" fill={C.pink} radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="burned" fill={C.pink} radius={[3, 3, 0, 0]} isAnimationActive={!chartsSettled} animationDuration={600} animationEasing="ease-out" />
                       </BarChart>
                     </ResponsiveContainer>
                   )}
@@ -3570,19 +3728,19 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
       }}>
         <NavBtn active={tab === "home"} onClick={() => setTab("home")} icon={Home} label="Home" />
         <NavBtn active={tab === "logs"} onClick={() => setTab("logs")} icon={ClipboardList} label="Logs" />
-        <div style={{ width: 60 }} />
         <NavBtn active={tab === "charts"} onClick={() => setTab("charts")} icon={BarChart3} label="Insights" />
         <NavBtn active={tab === "profile"} onClick={() => setTab("profile")} icon={User} label="Profile" />
       </div>
 
-      {/* Fan-out quick actions — Meal / Exercise, side by side just above the
-          FAB. Always mounted so the close animation can reverse smoothly
-          instead of just vanishing; each button's own opacity/transform is
-          driven by fabOpen, with a slight stagger between the two. */}
-      <div className="absolute flex items-center gap-3" style={{
-        left: "50%",
-        bottom: "calc(112px + env(safe-area-inset-bottom, 0px))",
-        transform: "translateX(-50%)",
+      {/* Fan-out quick actions — Meal / Exercise, stacked upward (Meal
+          closest to the FAB, Exercise above it) rather than side by side.
+          Right-aligned to match the FAB's new position above Profile.
+          Always mounted so the close animation can reverse smoothly instead
+          of just vanishing; each button's own opacity/transform is driven by
+          fabOpen, with a slight stagger between the two. */}
+      <div className="absolute flex flex-col-reverse items-end gap-3" style={{
+        right: "calc(12.5% - 14px)",
+        bottom: "calc(156px + env(safe-area-inset-bottom, 0px))",
         pointerEvents: fabOpen ? "auto" : "none",
         zIndex: 45,
       }}>
@@ -3618,13 +3776,13 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
         onPointerCancel={() => setFabPressed(false)}
         className={`absolute flex items-center justify-center fab-pill${!fabOpen && !fabPressed ? " fab-breathe" : ""}`}
         style={{
-          left: "50%",
+          right: "calc(12.5% - 14px)",
           transform: fabOpen
-            ? "translateX(-50%) rotate(45deg)"
+            ? "rotate(45deg)"
             : fabPressed
-              ? "translateX(-50%) translateY(-8px) scale(1.1)"
-              : "translateX(-50%)",
-          bottom: "calc(46px + env(safe-area-inset-bottom, 0px))",
+              ? "translateY(-8px) scale(1.1)"
+              : "none",
+          bottom: "calc(90px + env(safe-area-inset-bottom, 0px))",
           width: 52, height: 52, borderRadius: "50%",
           background: `linear-gradient(135deg, ${C.orange}, ${C.orangeDeep})`,
           boxShadow: fabPressed || fabOpen
@@ -3655,7 +3813,15 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
             const next = exists ? exerciseLogs.map((x) => (x.id === entry.id ? entry : x)) : [entry, ...exerciseLogs];
             await persistExercise(next);
             haptic("success");
-            if (!exists) { firePulse("workout"); setJustAddedId(entry.id); setTimeout(() => setJustAddedId(null), 1200); }
+            if (!exists) {
+              firePulse("workout");
+              setJustAddedId(entry.id);
+              setTimeout(() => setJustAddedId(null), 1200);
+              const overload = computeProgressiveOverload(entry, exerciseLogs);
+              if (overload && overload.isPR) {
+                fireCelebration({ icon: Award, color: C.tan, bg: C.tanTint, text: `🏋️ Personal Record — ${entry.name}!` });
+              }
+            }
             setShowAdd(false); setEditingEntry(null);
           }}
         />
@@ -3708,7 +3874,7 @@ function AddLogSheet({ initialLogType, initialMode, goals, todayTotals, todayLog
 
   return (
     <div className={`absolute inset-0 flex flex-col justify-end ${closing ? "anim-sheet-backdrop-out" : "anim-sheet-backdrop-in"}`} style={{ background: "rgba(21,23,27,0.4)", zIndex: 50 }} onClick={requestClose}>
-      <div className={`flex flex-col ${closing ? "anim-sheet-slide-out" : "anim-sheet-slide-in"}`} style={{ background: C.bgBottom, borderRadius: "24px 24px 0 0", maxHeight: "90%", boxShadow: "0 -8px 30px rgba(0,0,0,0.2)" }} onClick={(e) => e.stopPropagation()}>
+      <div className={`flex flex-col ${closing ? "anim-sheet-slide-out" : "anim-sheet-slide-in"}`} style={{ background: C.bgBottom, borderRadius: "24px 24px 0 0", maxHeight: "90%", boxShadow: "0 -8px 30px rgba(0,0,0,0.2)", overflowX: "hidden" }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 pt-4 pb-2">
           <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>{isEditing ? (logType === "meal" ? "Edit meal" : "Edit workout") : "Add a log"}</span>
           <button onClick={requestClose} style={{ width: 30, height: 30, borderRadius: "50%", background: C.card, display: "flex", alignItems: "center", justifyContent: "center" }}><X size={15} color={C.ink} /></button>
@@ -4178,7 +4344,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
           {quickPicks.length > 0 && (
             <div className="mb-4">
               <div className="ft-body mb-1.5" style={{ fontSize: 12.5, fontWeight: 700, color: C.inkSoft, letterSpacing: 0.5, textTransform: "uppercase" }}>Quick log</div>
-              <div className="flex gap-2 overflow-x-auto pb-1">
+              <div className="flex gap-2 overflow-x-auto pb-1" style={{ minWidth: 0, width: "100%" }}>
                 {quickPicks.map((m, i) => (
                   <div key={m.id || i} className="flex flex-col gap-1.5 p-2.5 flex-shrink-0" style={{ background: C.card, borderRadius: 12, minWidth: 128, border: `1px solid ${C.line}` }}>
                     <button onClick={() => quickLog(m)} className="text-left">
@@ -4534,7 +4700,7 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry, splits }) {
             <Layers size={13} color={C.inkSoft} />
             <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 600 }}>{activeSplit.name}</span>
           </div>
-          <div className="flex gap-1.5 mb-2" style={{ overflowX: "auto" }}>
+          <div className="flex gap-1.5 mb-2" style={{ overflowX: "auto", minWidth: 0, width: "100%" }}>
             {activeSplit.days.map((d) => (
               <button key={d.id} onClick={() => setSplitDayId(d.id === splitDayId ? null : d.id)} className="flex-shrink-0 px-3 py-1.5 rounded-full ft-body"
                 style={{ background: splitDayId === d.id ? C.blue : C.card, color: splitDayId === d.id ? "#fff" : C.ink, fontSize: 12, fontWeight: 600 }}>
@@ -5171,6 +5337,16 @@ function WeightTrackerScreen({ weights, weightSeries, goalWeight, weightPace, we
   const [inputVal, setInputVal] = useState("");
   const latest = weights.length ? [...weights].sort((a, b) => b.timestamp - a.timestamp)[0] : null;
 
+  // Redraw once on mount, and again any time a weigh-in is added or removed
+  // (not on unrelated re-renders), so the line visibly extends to the new
+  // point instead of just snapping.
+  const [chartsSettled, setChartsSettled] = useState(false);
+  useEffect(() => {
+    setChartsSettled(false);
+    const t = setTimeout(() => setChartsSettled(true), 700);
+    return () => clearTimeout(t);
+  }, [weights.length]);
+
   function submit() {
     const w = num(inputVal, null);
     if (!w) return;
@@ -5191,8 +5367,15 @@ function WeightTrackerScreen({ weights, weightSeries, goalWeight, weightPace, we
         <div className="p-5 mb-4" style={{ background: C.card, borderRadius: 24, boxShadow: "0 2px 10px rgba(20,20,20,0.06)" }}>
           <div className="flex items-end justify-between mb-4">
             <div className="flex items-baseline gap-1.5">
-              <span className="ft-display" style={{ fontSize: 34, fontWeight: 700, color: C.ink }}>{latest ? latest.weight : "0.0"}</span>
+              <span className="ft-display" style={{ fontSize: 34, fontWeight: 700, color: C.ink }}><AnimatedNumber value={latest ? latest.weight : 0} decimals={1} /></span>
               <span className="ft-body" style={{ fontSize: 14, color: C.inkSoft, fontWeight: 600 }}>kg</span>
+              {weightProjection && (
+                <span key={latest ? latest.id : "none"} className="anim-check-pop flex items-center" style={{ marginLeft: 2, animationFillMode: "backwards" }}>
+                  {weightProjection.onTrack
+                    ? <TrendingUp size={16} color={C.green} />
+                    : <TrendingDown size={16} color={C.pink} />}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-1.5">
               <input type="number" inputMode="decimal" value={inputVal} onChange={(e) => setInputVal(e.target.value)} placeholder="Add kg"
@@ -5215,10 +5398,11 @@ function WeightTrackerScreen({ weights, weightSeries, goalWeight, weightPace, we
                   <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} width={34} domain={["dataMin - 2", "dataMax + 2"]} />
                   <Tooltip contentStyle={{ fontSize: 12, borderRadius: 12, border: `1px solid ${C.line}`, background: C.card, color: C.ink }} labelStyle={{ color: C.ink, fontWeight: 600, marginBottom: 4 }} />
                   {goalWeight > 0 && (
-                    <ReferenceLine y={goalWeight} stroke={C.green} strokeDasharray="4 4" strokeWidth={1.5}
-                      label={{ value: "Goal", position: "insideTopRight", fill: C.green, fontSize: 12 }} />
+                    <ReferenceLine y={goalWeight} stroke={C.green} strokeOpacity={chartsSettled ? 1 : 0} strokeDasharray="4 4" strokeWidth={1.5}
+                      style={{ transition: "stroke-opacity .5s ease" }}
+                      label={{ value: "Goal", position: "insideTopRight", fill: C.green, fontSize: 12, style: { opacity: chartsSettled ? 1 : 0, transition: "opacity .5s ease" } }} />
                   )}
-                  <Line type="monotone" dataKey="weight" stroke={C.orange} strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="weight" stroke={C.orange} strokeWidth={2} dot={makeExpandingLastDot(weightSeries.length, chartsSettled, C.orange)} isAnimationActive={!chartsSettled} animationDuration={700} animationEasing="ease-out" />
                 </LineChart>
               </ResponsiveContainer>
               <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
