@@ -19,7 +19,7 @@ import {
   Flame, Trophy, Dumbbell, Wheat, Droplet, AlertCircle, Home, Activity, Sparkles,
   Star, Pencil, Copy, Droplets, ChevronLeft, ChevronRight, ChevronDown, CalendarDays, Gauge,
   Bell, Award, Layers, Brain, Lightbulb, Mic, ScanBarcode, ThumbsUp, ThumbsDown,
-  Moon, BedDouble, AlarmClock, Sunrise, Scale, Leaf
+  Moon, BedDouble, AlarmClock, Sunrise, Scale, Leaf, Cloud
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis,
@@ -762,10 +762,12 @@ function computeTodayStatus({ todayTotals, goals, todayLogs }) {
 // Per-day read on adherence (good/ok/off/none) for the last `daysCount` days —
 // the same "how close to goal" logic as computeTodayStatus, applied day by day,
 // so a week can be scanned at a glance instead of read off a line chart.
-function computeWeeklyConsistency(logs, goals, daysCount = 7) {
+// `offsetDays` shifts the whole window further into the past (e.g. 7 to get
+// the week before the current one), used to detect week-over-week improvement.
+function computeWeeklyConsistency(logs, goals, daysCount = 7, offsetDays = 0) {
   const today = todayStr();
   const days = [];
-  for (let i = daysCount - 1; i >= 0; i--) days.push(daysAgo(i));
+  for (let i = daysCount - 1; i >= 0; i--) days.push(daysAgo(i + offsetDays));
   return days.map((date) => {
     const dayLogs = logs.filter((l) => l.date === date);
     const totals = dayLogs.reduce((acc, l) => ({
@@ -785,9 +787,14 @@ function computeWeeklyConsistency(logs, goals, daysCount = 7) {
     } else {
       status = "off";
     }
+    // A rough "how much of the day's goal did this hit" fill amount, purely
+    // for the bar's fill height — separate from the good/ok/off categorization
+    // above (which stays exactly as it was) so the visual can be more granular
+    // than the 3-way bucket without changing what counts as "good".
+    const fillPct = dayLogs.length === 0 ? 0 : clamp((calPct * 0.6 + Math.min(proPct, 100) * 0.4), 6, 100);
 
     const weekdayLetter = ["S", "M", "T", "W", "T", "F", "S"][new Date(date + "T00:00:00").getDay()];
-    return { date, weekdayLetter, status, isToday, loggedMeals: dayLogs.length };
+    return { date, weekdayLetter, status, isToday, loggedMeals: dayLogs.length, fillPct };
   });
 }
 
@@ -1298,6 +1305,64 @@ function MicroInteractionStyles() {
       @keyframes fabBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
       .fab-breathe { animation: fabBreathe 2.4s ease-in-out infinite; }
       .fab-option { transition: transform .38s cubic-bezier(.34,1.56,.64,1), opacity .28s ease; }
+
+      /* ---- Card expand (spring) ---- */
+      .meal-card-expand-wrap { overflow: hidden; transition: grid-template-rows .45s cubic-bezier(.22,1.28,.36,1); display: grid; }
+      @keyframes mealDetailIn { 0% { opacity: 0; transform: scale(.96) translateY(-4px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
+      .anim-meal-detail-in { animation: mealDetailIn .38s cubic-bezier(.22,1.28,.36,1) both; }
+      .meal-chevron { transition: transform .35s cubic-bezier(.34,1.56,.64,1); }
+
+      /* ---- Skeleton shimmer ---- */
+      @keyframes skeletonShimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+      .skeleton-shimmer {
+        background: linear-gradient(90deg, ${C.line} 25%, ${C.card} 50%, ${C.line} 75%);
+        background-size: 200% 100%; animation: skeletonShimmer 1.4s ease-in-out infinite;
+      }
+
+      /* ---- Streak flame flicker ---- */
+      @keyframes flameFlicker {
+        0%, 100% { transform: scale(1) rotate(0deg); opacity: 1; }
+        20% { transform: scale(1.06) rotate(-3deg); opacity: 0.92; }
+        40% { transform: scale(0.97) rotate(2deg); opacity: 1; }
+        60% { transform: scale(1.08) rotate(-1deg); opacity: 0.9; }
+        80% { transform: scale(1.02) rotate(2deg); opacity: 1; }
+      }
+      .anim-flame-flicker { animation: flameFlicker 1.8s ease-in-out infinite; transform-origin: center bottom; }
+
+      /* ---- Chip / tag pop-in ---- */
+      @keyframes chipPopIn { 0% { opacity: 0; transform: scale(.5); } 65% { opacity: 1; transform: scale(1.08); } 100% { opacity: 1; transform: scale(1); } }
+      .anim-chip-pop { animation: chipPopIn .38s cubic-bezier(.34,1.56,.64,1) both; }
+
+      /* ---- Empty state motion ---- */
+      @keyframes emptyFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+      .anim-empty-float { animation: emptyFloat 2.6s ease-in-out infinite; }
+
+      /* ---- Cloud sync pulse ---- */
+      @keyframes cloudPulse { 0%, 100% { opacity: .55; transform: scale(1); } 50% { opacity: 1; transform: scale(1.12); } }
+      .anim-cloud-pulse { animation: cloudPulse 1s ease-in-out infinite; }
+      @keyframes cloudRing { 0% { transform: scale(0.6); opacity: 0.5; } 100% { transform: scale(1.9); opacity: 0; } }
+      .anim-cloud-ring { animation: cloudRing 1.3s ease-out infinite; }
+
+      /* ---- Reminder notification slide ---- */
+      @keyframes notifSlideIn { 0% { opacity: 0; transform: translateY(-14px) scale(.97); } 70% { opacity: 1; } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+      .anim-notif-slide { animation: notifSlideIn .4s cubic-bezier(.22,1.15,.36,1) both; }
+      @keyframes notifPulseDot { 0%, 100% { box-shadow: 0 0 0 0 rgba(224,87,127,0.5); } 50% { box-shadow: 0 0 0 4px rgba(224,87,127,0); } }
+      .anim-notif-pulse-dot { animation: notifPulseDot 1.6s ease-in-out infinite; }
+
+      /* ---- Calendar date flip ---- */
+      @keyframes dateFlipIn { 0% { opacity: 0; transform: rotateX(70deg); } 100% { opacity: 1; transform: rotateX(0deg); } }
+      .anim-date-flip { display: inline-block; animation: dateFlipIn .38s cubic-bezier(.22,.9,.34,1) both; transform-style: preserve-3d; backface-visibility: hidden; }
+
+      /* ---- Section reveal on scroll ---- */
+      @keyframes sectionRevealUp { 0% { opacity: 0; transform: translateY(22px); } 100% { opacity: 1; transform: translateY(0); } }
+      .anim-section-reveal { animation: sectionRevealUp .55s cubic-bezier(.22,.9,.34,1) both; }
+
+      /* ---- Button press ripple / scale ---- */
+      button:not(:disabled) { transition: transform .12s ease; }
+      button:active:not(:disabled) { transform: scale(0.94); }
+      .ripple-btn { position: relative; overflow: hidden; }
+      .ripple-dot { position: absolute; border-radius: 50%; background: rgba(255,255,255,0.55); transform: scale(0); animation: rippleExpand .55s ease-out forwards; pointer-events: none; }
+      @keyframes rippleExpand { to { transform: scale(2.6); opacity: 0; } }
     `}</style>
   );
 }
@@ -1635,9 +1700,11 @@ function MealCompleteSummary({ pending, goals, justAnalyzed, onViewDetails }) {
       </div>
 
       <div className="p-3 mb-3" style={{ background: C.card, borderRadius: 16, border: `1px solid ${C.line}` }}>
-        <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center justify-between mb-1.5">
           <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>Meal Quality</span>
-          <span className="ft-body px-2 py-0.5" style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenTint, borderRadius: 999 }}>{quality.label}</span>
+          <div className="flex flex-wrap gap-1.5 justify-end">
+            {mealTags(pending).map((t, i) => <TagChip key={t.label} label={t.label} color={t.color} bg={t.bg} index={i} />)}
+          </div>
         </div>
         <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4 }}>{quality.detail}</span>
       </div>
@@ -1661,7 +1728,7 @@ function MealCompleteSummary({ pending, goals, justAnalyzed, onViewDetails }) {
         ))}
       </div>
 
-      <button onClick={onViewDetails} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.orange, color: "#fff", fontSize: 14, fontWeight: 600 }}>
+      <button onClick={onViewDetails} onPointerDown={addRippleEffect} className="ripple-btn w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.orange, color: "#fff", fontSize: 14, fontWeight: 600 }}>
         View Details <ChevronRight size={16} />
       </button>
     </div>
@@ -1722,10 +1789,9 @@ function PortionAdviceCard({ pending, justAnalyzed, goals }) {
 }
 
 function NutritionSkeleton() {
-  const bar = (w, h = 12) => <div style={{ width: w, height: h, borderRadius: 6, background: C.track, opacity: 0.7 }} className="skeleton-pulse" />;
+  const bar = (w, h = 12) => <SkeletonBlock width={w} height={h} radius={6} />;
   return (
     <div className="p-4 mt-3" style={{ background: C.card, border: `2px solid ${C.line}`, borderRadius: 16 }}>
-      <style>{`@keyframes skeletonPulse{0%,100%{opacity:.45}50%{opacity:.9}} .skeleton-pulse{animation:skeletonPulse 1.1s ease-in-out infinite}`}</style>
       <div className="flex items-center justify-between mb-3">{bar(120, 16)}{bar(50, 22)}</div>
       <div className="flex flex-col gap-2.5">
         {[1, 2, 3, 4, 5].map((i) => (
@@ -1929,24 +1995,52 @@ function WaterWaveCard({ todayWater, goalMl, onAdd, onRemove, compact, animation
 // meant to answer "how consistent was I" faster than reading a line chart.
 // Deliberately NOT wrapped in its own bordered card (see the "fewer boxes"
 // pass elsewhere in this file) — it's a lightweight section, not a feature.
-function WeeklyConsistencyRow({ days, title = "This week's consistency" }) {
+function WeeklyConsistencyRow({ days, lastWeekGoodCount, title = "This week's consistency" }) {
   const STATUS_COLOR = { good: C.green, ok: C.tan, off: C.pink, none: C.pink, pending: C.track };
+  const goodCount = days.filter((d) => d.status === "good").length;
+  const daysWithData = days.filter((d) => d.status !== "pending").length;
+  const isPerfectWeek = daysWithData === 7 && goodCount === 7;
+  const improved = lastWeekGoodCount != null && goodCount > lastWeekGoodCount && daysWithData === 7;
   return (
     <div className="mb-5">
+      <style>{`
+        @keyframes barFillGrow { 0% { height: 0%; } 100% { height: var(--fill-pct, 0%); } }
+        .anim-bar-fill { animation: barFillGrow .5s cubic-bezier(.22,.9,.34,1) both; }
+        @keyframes perfectWeekPop { 0% { opacity: 0; transform: scale(0.7) translateY(4px); } 60% { opacity: 1; transform: scale(1.05) translateY(0); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
+        .anim-perfect-week { animation: perfectWeekPop .5s cubic-bezier(.22,.9,.34,1) .5s both; }
+        @keyframes improveSlideIn { 0% { opacity: 0; transform: translateX(-8px); } 100% { opacity: 1; transform: translateX(0); } }
+        .anim-improve-in { animation: improveSlideIn .4s ease .5s both; }
+      `}</style>
       <div className="flex items-center justify-between mb-2.5">
         <span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.inkSoft }}>{title}</span>
+        {isPerfectWeek ? (
+          <span className="anim-perfect-week ft-body flex items-center gap-1 px-2 py-0.5" style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenTint, borderRadius: 999 }}>
+            <Trophy size={11} /> Perfect week
+          </span>
+        ) : improved ? (
+          <span className="anim-improve-in ft-body flex items-center gap-1 px-2 py-0.5" style={{ fontSize: 11, fontWeight: 700, color: C.orange, background: C.orangeTint, borderRadius: 999 }}>
+            <TrendingUp size={11} /> {goodCount}/7 vs {lastWeekGoodCount}/7 last week
+          </span>
+        ) : null}
       </div>
       <div className="flex items-center justify-between">
         {days.map((d, i) => (
           <div key={d.date} className="flex flex-col items-center gap-1.5" style={{ flex: 1 }}>
             <span className="ft-body" style={{ fontSize: 11, fontWeight: d.isToday ? 700 : 500, color: d.isToday ? C.ink : C.inkSoft }}>{d.weekdayLetter}</span>
-            <div className="anim-dot-in" style={{
-              width: 22, height: 22, borderRadius: "50%",
-              background: d.status === "pending" ? "transparent" : STATUS_COLOR[d.status],
-              border: d.status === "pending" ? `2px dashed ${C.line}` : d.isToday ? `2px solid ${C.card}` : "none",
-              boxShadow: d.isToday && d.status !== "pending" ? `0 0 0 2px ${STATUS_COLOR[d.status]}55` : "none",
-              animationDelay: `${i * 60}ms`,
-            }} />
+            {/* Each day's bar fills bottom-up on mount, staggered in
+                chronological (Monday -> Sunday) order via the index delay —
+                "pending" (today, not logged yet) stays an empty dashed
+                track with nothing to animate. */}
+            <div style={{ width: 14, height: 26, borderRadius: 7, background: C.track, border: d.status === "pending" ? `2px dashed ${C.line}` : "none", overflow: "hidden", display: "flex", alignItems: "flex-end", boxShadow: d.isToday && d.status !== "pending" ? `0 0 0 2px ${STATUS_COLOR[d.status]}55` : "none" }}>
+              {d.status !== "pending" && (
+                <div className="anim-bar-fill" style={{
+                  width: "100%", borderRadius: 7,
+                  background: STATUS_COLOR[d.status],
+                  "--fill-pct": `${Math.max(d.fillPct, 14)}%`,
+                  animationDelay: `${i * 90}ms`,
+                }} />
+              )}
+            </div>
           </div>
         ))}
       </div>
@@ -1970,6 +2064,75 @@ function Chip({ active, onClick, label }) {
       {label}
     </button>
   );
+}
+
+// A small pill used for food tags ("High protein", "Low calorie", ...) that pop
+// in one-by-one via a staggered animation delay based on list index.
+function TagChip({ label, color, bg, index = 0 }) {
+  return (
+    <span className="anim-chip-pop ft-body px-2.5 py-1 rounded-full" style={{
+      fontSize: 11, fontWeight: 700, color, background: bg, animationDelay: `${index * 90}ms`, animationFillMode: "backwards",
+    }}>{label}</span>
+  );
+}
+
+// Derives a small set of at-a-glance quality tags from a meal's macros (purely
+// computed client-side — no extra AI call) so a meal card can show a few
+// pop-in chips like "High protein" / "Low calorie" / "High fiber".
+function mealTags(m) {
+  const tags = [];
+  const proteinCalPct = m.calories > 0 ? ((num(m.protein_g) * 4) / m.calories) * 100 : 0;
+  if (proteinCalPct >= 25) tags.push({ label: "High protein", color: C.green, bg: C.greenTint });
+  if (num(m.calories) > 0 && num(m.calories) <= 350) tags.push({ label: "Low calorie", color: C.blue, bg: C.blueTint });
+  if (num(m.fiber_g) >= 5) tags.push({ label: "High fiber", color: C.tan, bg: C.tanTint });
+  if (num(m.fat_g) > 0 && num(m.fat_g) <= 10) tags.push({ label: "Low fat", color: C.purple, bg: C.purpleTint });
+  if (tags.length === 0) tags.push({ label: "Logged", color: C.inkSoft, bg: C.track });
+  return tags;
+}
+
+// Lightweight scroll-reveal wrapper: fades + lifts its children up once they
+// first enter the viewport, then leaves them alone (no re-triggering on
+// scroll-back so long lists don't keep re-animating).
+function RevealOnScroll({ children, className = "", style }) {
+  const ref = useRef(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => { if (entry.isIntersecting) { setVisible(true); io.disconnect(); } });
+    }, { threshold: 0.15 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return (
+    <div ref={ref} className={(visible ? "anim-section-reveal " : "") + className} style={{ ...style, opacity: visible ? undefined : 0 }}>
+      {children}
+    </div>
+  );
+}
+
+// Attaches a quick expanding-circle ripple at the tap point to any button —
+// used for primary/FAB-style buttons where a plain scale-down feels flat.
+function addRippleEffect(e) {
+  const btn = e.currentTarget;
+  const rect = btn.getBoundingClientRect();
+  const size = Math.max(rect.width, rect.height);
+  const x = (e.clientX ?? rect.left + rect.width / 2) - rect.left - size / 2;
+  const y = (e.clientY ?? rect.top + rect.height / 2) - rect.top - size / 2;
+  const dot = document.createElement("span");
+  dot.className = "ripple-dot";
+  dot.style.width = dot.style.height = `${size}px`;
+  dot.style.left = `${x}px`;
+  dot.style.top = `${y}px`;
+  btn.appendChild(dot);
+  setTimeout(() => dot.remove(), 560);
+}
+
+// Uniform shimmering placeholder block for anywhere content ("AI is thinking",
+// data still loading) would otherwise show a static gray blank.
+function SkeletonBlock({ width = "100%", height = 14, radius = 8, style }) {
+  return <div className="skeleton-shimmer" style={{ width, height, borderRadius: radius, ...style }} />;
 }
 
 // ---------- Swipeable / long-press row ----------
@@ -2056,7 +2219,7 @@ function SwipeRow({ children, onEdit, onDuplicate, onDelete, actionWidth = 132 }
 function EmptyState({ text, compact, icon: Icon = Utensils }) {
   return (
     <div className="flex flex-col items-center justify-center text-center" style={{ padding: compact ? "20px 0" : "40px 0" }}>
-      <div style={{
+      <div className="anim-empty-float" style={{
         width: compact ? 48 : 64, height: compact ? 48 : 64, borderRadius: "50%",
         background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12,
       }}>
@@ -2117,7 +2280,7 @@ function MiniCalendar({ mealDates, exerciseDates, selectedDate, onSelectDate }) 
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-1.5">
           <CalendarDays size={15} color={C.ink} />
-          <span className="ft-body" style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{monthLabel}</span>
+          <span key={monthLabel} className="ft-body anim-date-flip" style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{monthLabel}</span>
         </div>
         <div className="flex items-center gap-1">
           <button onClick={() => setMonthCursor((m) => { const n = new Date(m); n.setMonth(n.getMonth() - 1); return n; })} className="p-1.5"><ChevronLeft size={16} color={C.inkSoft} /></button>
@@ -2245,6 +2408,7 @@ const handleGoogleSignIn = async () => {
   const [fabOpen, setFabOpen] = useState(false);
   const [addMode, setAddMode] = useState("photo");
   const [logsSubTab, setLogsSubTab] = useState("meals");
+  const [expandedMealId, setExpandedMealId] = useState(null);
   const [logsDateFilter, setLogsDateFilter] = useState(null);
   const [chartsSubTab, setChartsSubTab] = useState("nutrition");
   const [nutritionChartMetric, setNutritionChartMetric] = useState("calories");
@@ -2364,11 +2528,43 @@ const handleGoogleSignIn = async () => {
     }, 190));
   }
   function dayTransitionStyle() {
-    if (!dayTransition) return { transform: "translateX(0)", opacity: 1, transition: "transform .22s cubic-bezier(.22,.9,.34,1), opacity .2s ease" };
+    if (!dayTransition) return { transform: "none", opacity: 1, transition: "transform .22s cubic-bezier(.22,.9,.34,1), opacity .2s ease" };
     const sign = dayTransition.dir === "left" ? -1 : 1;
     if (dayTransition.phase === "out") return { transform: `translateX(${sign * 22}%)`, opacity: 0, transition: "transform .19s ease, opacity .19s ease" };
     if (dayTransition.phase === "jump") return { transform: `translateX(${-sign * 22}%)`, opacity: 0, transition: "none" };
     return { transform: "translateX(0)", opacity: 1, transition: "transform .22s cubic-bezier(.22,.9,.34,1), opacity .2s ease" }; // "in"
+  }
+
+  // ---------- Bottom-nav tab-slide transition ----------
+  // Same "out -> swap -> in" choreography as the day-swipe above, applied to
+  // switching between Home/Logs/Insights/Profile — the outgoing tab slides
+  // out toward whichever side matches the nav order, then the new tab mounts
+  // (React only ever has one tab's content mounted, same as before — this is
+  // a slide-and-swap illusion, not two tabs rendered at once) and slides in
+  // from the other side, instead of the content just cutting instantly.
+  const TAB_ORDER = ["home", "logs", "charts", "profile"];
+  const [tabTransition, setTabTransition] = useState(null); // { dir: "left"|"right", phase: "out"|"jump"|"in" } | null
+  const tabTransitionTimers = useRef([]);
+  useEffect(() => () => tabTransitionTimers.current.forEach(clearTimeout), []);
+  function animateTabChange(newTab) {
+    if (newTab === tab) return;
+    const dir = TAB_ORDER.indexOf(newTab) > TAB_ORDER.indexOf(tab) ? "left" : "right";
+    tabTransitionTimers.current.forEach(clearTimeout);
+    tabTransitionTimers.current = [];
+    setTabTransition({ dir, phase: "out" });
+    tabTransitionTimers.current.push(setTimeout(() => {
+      setTab(newTab);
+      setTabTransition({ dir, phase: "jump" });
+      requestAnimationFrame(() => requestAnimationFrame(() => setTabTransition({ dir, phase: "in" })));
+      tabTransitionTimers.current.push(setTimeout(() => setTabTransition(null), 240));
+    }, 160));
+  }
+  function tabTransitionStyle() {
+    if (!tabTransition) return { transform: "none", opacity: 1, transition: "transform .2s cubic-bezier(.22,.9,.34,1), opacity .18s ease" };
+    const sign = tabTransition.dir === "left" ? -1 : 1;
+    if (tabTransition.phase === "out") return { transform: `translateX(${sign * 5}%)`, opacity: 0, transition: "transform .16s ease, opacity .16s ease" };
+    if (tabTransition.phase === "jump") return { transform: `translateX(${-sign * 5}%)`, opacity: 0, transition: "none" };
+    return { transform: "translateX(0)", opacity: 1, transition: "transform .2s cubic-bezier(.22,.9,.34,1), opacity .18s ease" }; // "in"
   }
 
   const onPullTouchStart = (e) => {
@@ -2465,8 +2661,25 @@ const handleGoogleSignIn = async () => {
     return best;
   }, [logs]);
 
-  async function persistLogs(next) { setLogs(next); await saveKey("meal-logs", next); syncKeyToCloud(user, "meal-logs", next); }
-  async function persistWeights(next) { setWeights(next); await saveKey("weight-logs", next); syncKeyToCloud(user, "weight-logs", next); }
+  // Cloud sync pulse — briefly flips true whenever a persist* function pushes
+  // to Firestore, so the header can show a small "backing up" cloud animation
+  // instead of syncing invisibly. Debounced so rapid successive saves (e.g.
+  // typing in a text field) don't make the icon flicker on and off.
+  const [cloudSyncing, setCloudSyncing] = useState(false);
+  const cloudSyncOffTimer = useRef(null);
+  function syncAndPulse(key, value) {
+    if (!user) return;
+    setCloudSyncing(true);
+    const p = syncKeyToCloud(user, key, value);
+    Promise.resolve(p).finally(() => {
+      clearTimeout(cloudSyncOffTimer.current);
+      cloudSyncOffTimer.current = setTimeout(() => setCloudSyncing(false), 700);
+    });
+    return p;
+  }
+
+  async function persistLogs(next) { setLogs(next); await saveKey("meal-logs", next); syncAndPulse("meal-logs", next); }
+  async function persistWeights(next) { setWeights(next); await saveKey("weight-logs", next); syncAndPulse("weight-logs", next); }
   async function addWeightEntry(w) {
     const entry = { id: uid(), date: todayStr(), timestamp: Date.now(), weight: w };
     haptic("success");
@@ -2474,12 +2687,12 @@ const handleGoogleSignIn = async () => {
     await persistWeights([entry, ...weights.filter((x) => x.date !== todayStr())]);
   }
   async function deleteWeightEntry(id) { haptic("delete"); await persistWeights(weights.filter((w) => w.id !== id)); }
-  async function persistWater(next) { setWaterLogs(next); await saveKey("water-logs", next); syncKeyToCloud(user, "water-logs", next); }
+  async function persistWater(next) { setWaterLogs(next); await saveKey("water-logs", next); syncAndPulse("water-logs", next); }
   async function addWater(ml) {
     haptic("light");
     await persistWater([{ id: uid(), date: todayStr(), ml, timestamp: Date.now() }, ...waterLogs]);
   }
-  async function persistSleep(next) { setSleepLogs(next); await saveKey("sleep-logs", next); syncKeyToCloud(user, "sleep-logs", next); }
+  async function persistSleep(next) { setSleepLogs(next); await saveKey("sleep-logs", next); syncAndPulse("sleep-logs", next); }
   async function addSleep(bedtime, wakeTime) {
     const entry = { id: uid(), date: todayStr(), bedtime, wakeTime, durationMinutes: sleepDurationMinutes(bedtime, wakeTime), timestamp: Date.now() };
     haptic("success");
@@ -2493,14 +2706,14 @@ const handleGoogleSignIn = async () => {
     haptic("light");
     await persistWater(waterLogs.filter((_, i) => i !== idx));
   }
-  async function persistGoals(next) { setGoals(next); await saveKey("goals", next); syncKeyToCloud(user, "goals", next); }
-  async function persistProfile(next) { setProfile(next); await saveKey("profile", next); syncKeyToCloud(user, "profile", next); }
-  async function persistExercise(next) { setExerciseLogs(next); await saveKey("exercise-logs", next); syncKeyToCloud(user, "exercise-logs", next); }
-  async function persistSplits(next) { setSplits(next); await saveKey("workout-splits", next); syncKeyToCloud(user, "workout-splits", next); }
-  async function persistDailyCoach(next) { setDailyCoach(next); await saveKey("daily-coach", next); syncKeyToCloud(user, "daily-coach", next); }
-  async function persistWeeklyReview(next) { setWeeklyReview(next); await saveKey("weekly-review", next); syncKeyToCloud(user, "weekly-review", next); }
-  async function persistMonthlyReview(next) { setMonthlyReview(next); await saveKey("monthly-review", next); syncKeyToCloud(user, "monthly-review", next); }
-  async function persistFavorites(next) { setFavorites(next); await saveKey("favorite-meals", next); syncKeyToCloud(user, "favorite-meals", next); }
+  async function persistGoals(next) { setGoals(next); await saveKey("goals", next); syncAndPulse("goals", next); }
+  async function persistProfile(next) { setProfile(next); await saveKey("profile", next); syncAndPulse("profile", next); }
+  async function persistExercise(next) { setExerciseLogs(next); await saveKey("exercise-logs", next); syncAndPulse("exercise-logs", next); }
+  async function persistSplits(next) { setSplits(next); await saveKey("workout-splits", next); syncAndPulse("workout-splits", next); }
+  async function persistDailyCoach(next) { setDailyCoach(next); await saveKey("daily-coach", next); syncAndPulse("daily-coach", next); }
+  async function persistWeeklyReview(next) { setWeeklyReview(next); await saveKey("weekly-review", next); syncAndPulse("weekly-review", next); }
+  async function persistMonthlyReview(next) { setMonthlyReview(next); await saveKey("monthly-review", next); syncAndPulse("monthly-review", next); }
+  async function persistFavorites(next) { setFavorites(next); await saveKey("favorite-meals", next); syncAndPulse("favorite-meals", next); }
 
   async function deleteLog(id) {
     haptic("delete");
@@ -2567,6 +2780,8 @@ const handleGoogleSignIn = async () => {
   const insights = useMemo(() => generateInsights(logs, exerciseLogs, goals), [logs, exerciseLogs, goals, darkMode]);
   const weeklyDeltaStats = useMemo(() => computeWeeklyReviewStats(logs, exerciseLogs, waterLogs, weights, goals), [logs, exerciseLogs, waterLogs, weights, goals]);
   const weeklyConsistency = useMemo(() => computeWeeklyConsistency(logs, goals, 7), [logs, goals]);
+  const lastWeekConsistency = useMemo(() => computeWeeklyConsistency(logs, goals, 7, 7), [logs, goals]);
+  const lastWeekGoodCount = useMemo(() => lastWeekConsistency.filter((d) => d.status === "good").length, [lastWeekConsistency]);
   const periodSummary = useMemo(() => computePeriodSummary(logs, chartsPeriod === "week" ? 7 : 30), [logs, chartsPeriod]);
   const todayWater = useMemo(() => waterLogs.filter((w) => w.date === todayStr()).reduce((s, w) => s + num(w.ml), 0), [waterLogs]);
   const todaySleep = useMemo(() => sleepLogs.find((s) => s.date === todayStr()) || null, [sleepLogs]);
@@ -2771,13 +2986,22 @@ if (authLoading) {
         height: "100vh",
         background: `linear-gradient(180deg, ${C.bgTop} 0%, ${C.bgBottom} 100%)`,
         color: C.ink,
-        gap: 12,
+        gap: 14,
       }}
     >
-      <Loader2 className="animate-spin" size={28} color={C.orange} />
-      <div style={{ fontSize: 14, color: C.inkSoft }}>
-        Checking your Nourish account...
+      <style>{`
+        @keyframes splashGlow { 0% { opacity: 0; transform: scale(0.8); box-shadow: 0 0 0px 0px rgba(238,108,55,0); } 55% { opacity: 1; transform: scale(1.08); box-shadow: 0 0 28px 10px rgba(238,108,55,0.35); } 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 16px 3px rgba(238,108,55,0.18); } }
+        .anim-splash-glow { animation: splashGlow 1s cubic-bezier(.22,.9,.34,1) both; }
+        @keyframes splashWordmarkIn { 0% { opacity: 0; transform: translateY(6px); } 100% { opacity: 1; transform: translateY(0); } }
+        .anim-splash-wordmark { animation: splashWordmarkIn .6s ease .35s both; }
+        @keyframes splashSpinnerIn { 0% { opacity: 0; } 100% { opacity: 1; } }
+        .anim-splash-spinner { animation: splashSpinnerIn .5s ease .8s both; }
+      `}</style>
+      <div className="anim-splash-glow flex items-center justify-center" style={{ width: 64, height: 64, borderRadius: "50%", background: `linear-gradient(135deg, ${C.orange}, ${C.orangeDeep})` }}>
+        <Leaf size={30} color="#fff" />
       </div>
+      <span className="anim-splash-wordmark ft-display" style={{ fontSize: 22, fontWeight: 700, color: C.ink }}>Nourish</span>
+      <Loader2 className="animate-spin anim-splash-spinner" size={20} color={C.orange} style={{ marginTop: 6 }} />
     </div>
   );
 }
@@ -2931,6 +3155,12 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {cloudSyncing && (
+              <div className="relative flex items-center justify-center" style={{ width: 24, height: 24 }} title="Backing up">
+                <div className="anim-cloud-ring" style={{ position: "absolute", inset: 0, borderRadius: "50%", border: `1.5px solid ${C.blue}` }} />
+                <Cloud size={14} color={C.blue} className="anim-cloud-pulse" />
+              </div>
+            )}
             <button onClick={() => setNotifOpen((o) => !o)} className="relative flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: "50%", background: C.card }}>
               <Bell size={17} color={C.ink} />
               {smartNotifications.length > 0 && (
@@ -2940,7 +3170,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
             <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>Nourish</span>
           </div>
           {notifOpen && (
-            <div className="absolute" style={{ top: 44, right: 0, width: 280, zIndex: 40, background: C.card, borderRadius: 16, boxShadow: "0 10px 30px rgba(20,20,20,0.2)", padding: 12 }}>
+            <div className="absolute anim-notif-slide" style={{ top: 44, right: 0, width: 280, zIndex: 40, background: C.card, borderRadius: 16, boxShadow: "0 10px 30px rgba(20,20,20,0.2)", padding: 12 }}>
               <div className="flex items-center justify-between mb-2 px-1">
                 <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }}>Notifications</span>
                 <button onClick={() => setNotifOpen(false)}><X size={15} color={C.inkSoft} /></button>
@@ -2949,9 +3179,11 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                 <div className="py-4 text-center ft-body" style={{ fontSize: 12, color: C.inkSoft }}>You're all caught up.</div>
               ) : (
                 <div className="flex flex-col gap-2">
-                  {smartNotifications.map((n) => (
-                    <div key={n.id} className="flex items-start gap-2 p-2.5" style={{ background: n.bg, borderRadius: 12 }}>
-                      <n.icon size={14} color={n.color} style={{ flexShrink: 0, marginTop: 1 }} />
+                  {smartNotifications.map((n, i) => (
+                    <div key={n.id} className="anim-notif-slide flex items-start gap-2 p-2.5" style={{ background: n.bg, borderRadius: 12, animationDelay: `${i * 70}ms`, animationFillMode: "backwards" }}>
+                      <span className="relative flex items-center justify-center anim-notif-pulse-dot" style={{ flexShrink: 0, marginTop: 1, borderRadius: "50%" }}>
+                        <n.icon size={14} color={n.color} />
+                      </span>
                       <span className="ft-body flex-1" style={{ fontSize: 12, color: C.ink, lineHeight: 1.35 }}>{n.text}</span>
                       <button onClick={() => setDismissedNotifications((d) => [...d, n.id])} style={{ flexShrink: 0 }}><X size={12} color={C.inkSoft} /></button>
                     </div>
@@ -2962,6 +3194,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
           )}
         </div>
 
+        <div style={tabTransitionStyle()}>
         {tab === "home" && (
           <>
             {/* Sliding day content — date header, status, ring, macro pills,
@@ -2993,7 +3226,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                             fontSize: 12, fontWeight: active ? 700 : 500,
                             opacity: isFuture ? 0 : 1, pointerEvents: isFuture ? "none" : "auto",
                             transition: "background .2s ease, color .2s ease",
-                          }}>{isFuture ? "" : labelForOffset(o)}</button>
+                          }}>{isFuture ? "" : <span className={active ? "anim-date-flip" : ""} style={{ display: "inline-block" }}>{labelForOffset(o)}</span>}</button>
                       );
                     })}
                   </div>
@@ -3063,7 +3296,9 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                     <div><div className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>{viewedLogs.length}</div><div className="ft-body" style={{ fontSize: 12, color: C.inkSoft }}>meals logged</div></div>
                   </div>
                   <div className="flex items-center gap-2.5">
-                    <div style={{ width: 34, height: 34, borderRadius: 12, background: C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Trophy size={16} color={C.pink} /></div>
+                    <div style={{ width: 34, height: 34, borderRadius: 12, background: C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Flame size={16} color={C.pink} className={streak > 0 ? "anim-flame-flicker" : ""} />
+                    </div>
                     <div><div className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}><AnimatedNumber value={streak} /></div><div className="ft-body" style={{ fontSize: 12, color: C.inkSoft }}>day streak</div></div>
                   </div>
                 </div>
@@ -3220,27 +3455,56 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
 
             {viewedIsToday && (
             <div className="p-4 mb-6 anim-card-in" style={{ background: C.card, borderRadius: 16, boxShadow: "0 2px 10px rgba(20,20,20,0.06)", animationDelay: "490ms" }}>
+              <style>{`
+                @keyframes coachIconSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                .coach-icon-spin { animation: coachIconSpin 1.8s linear infinite; }
+                @keyframes coachWordIn { 0% { opacity: 0; transform: translateY(3px); } 100% { opacity: 1; transform: translateY(0); } }
+                .coach-word-in { display: inline-block; animation: coachWordIn .3s ease both; }
+                @keyframes coachSuggestionIn { 0% { opacity: 0; transform: translateY(8px); } 100% { opacity: 1; transform: translateY(0); } }
+                .coach-suggestion-in { animation: coachSuggestionIn .4s cubic-bezier(.22,.9,.34,1) both; }
+                @keyframes coachFocusPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+                .coach-focus-pulse { animation: coachFocusPulse 2.6s ease-in-out infinite; }
+              `}</style>
               <div className="flex items-center gap-2 mb-2.5">
                 <div style={{ width: 30, height: 30, borderRadius: "50%", background: C.purpleTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <Brain size={15} color={C.purple} />
+                  {coachLoading ? <Sparkles size={15} color={C.purple} className="coach-icon-spin" /> : <Brain size={15} color={C.purple} />}
                 </div>
                 <span className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>AI Daily Coach</span>
               </div>
               {coachLoading ? (
-                <div className="flex items-center gap-2 py-2">
-                  <Loader2 size={14} className="animate-spin" color={C.purple} />
-                  <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Reviewing today's log…</span>
+                <div className="flex flex-col gap-2 py-1">
+                  <SkeletonBlock width="92%" height={11} />
+                  <SkeletonBlock width="76%" height={11} />
+                  <SkeletonBlock width="55%" height={11} />
                 </div>
               ) : dailyCoach && dailyCoach.date === todayStr() ? (
                 <>
-                  <div className="ft-body mb-3" style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.45 }}>{dailyCoach.summary}</div>
-                  <div className="flex flex-col gap-2 mb-2">
-                    {dailyCoach.suggestions.map((s, i) => (
-                      <div key={i} className="flex items-start gap-2">
-                        <Lightbulb size={13} color={C.tan} style={{ flexShrink: 0, marginTop: 2 }} />
-                        <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4 }}>{s}</span>
-                      </div>
+                  {/* Soft word-by-word reveal for the summary — reads like the
+                      AI is actively writing it out, without a literal
+                      character-by-character typewriter (which would be
+                      slower to land and heavier to run for a 1-2 sentence
+                      recap). Replays automatically each time a fresh recap
+                      is generated, since this whole branch remounts then. */}
+                  <div className="ft-body mb-3" style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.45 }}>
+                    {dailyCoach.summary.split(/(\s+)/).map((chunk, i) => (
+                      <span key={i} className="coach-word-in" style={{ animationDelay: `${i * 14}ms` }}>{chunk}</span>
                     ))}
+                  </div>
+                  <div className="flex flex-col gap-2 mb-2">
+                    {dailyCoach.suggestions.map((s, i) => {
+                      const isFocus = i === dailyCoach.suggestions.length - 1 && dailyCoach.suggestions.length > 1;
+                      return (
+                        <div key={i} className="coach-suggestion-in" style={{ animationDelay: `${220 + i * 160}ms` }}>
+                          {isFocus && (
+                            <div className="ft-body mb-0.5" style={{ fontSize: 10, fontWeight: 700, color: C.purple, textTransform: "uppercase", letterSpacing: 0.4 }}>Tomorrow's focus</div>
+                          )}
+                          <div className={"flex items-start gap-2" + (isFocus ? " coach-focus-pulse" : "")}>
+                            <Lightbulb size={13} color={C.tan} style={{ flexShrink: 0, marginTop: 2 }} />
+                            <span className="ft-body" style={{ fontSize: 12, color: C.inkSoft, lineHeight: 1.4 }}>{s}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                   <button onClick={generateDailyCoach} className="ft-body" style={{ fontSize: 12.5, color: C.purple, fontWeight: 600 }}>Refresh</button>
                 </>
@@ -3279,44 +3543,73 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
               if (visibleMeals.length === 0) {
                 return <EmptyState icon={Utensils} text={logsDateFilter ? "No meals logged on this day." : "Nothing logged yet. Tap the orange + button to add your first meal."} />;
               }
-              const renderMeal = (l) => {
+              const renderMeal = (l, virtualized) => {
                 const items = splitFoodItems(l.food_name);
                 const itemsLine = items.length > 1
                   ? items.map((it) => `${foodEmoji(it)} ${it}`).join(" · ")
                   : `${foodEmoji(l.food_name)} ${l.food_name}`;
                 const hasThumb = l.source === "photo" && !!l.photo_thumb;
+                const isExpanded = !virtualized && expandedMealId === l.id;
                 return (
                 <SwipeRow onEdit={() => openEdit("meal", l)} onDuplicate={() => duplicateLog(l)} onDelete={() => deleteLog(l.id)}>
-                  <div className={"flex items-center justify-between p-3.5" + (l.id === justAddedId ? " anim-row-flash anim-row-slide-in" : "")} style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)", height: "100%", boxSizing: "border-box" }}>
-                    <div className="flex items-center gap-3 min-w-0">
-                      {hasThumb ? (
-                        <img src={l.photo_thumb} alt="" style={{ width: 42, height: 42, borderRadius: 12, objectFit: "cover", flexShrink: 0 }} />
-                      ) : (
-                        <div style={{ width: 38, height: 38, borderRadius: "50%", background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Utensils size={15} color={C.orange} /></div>
-                      )}
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="ft-body" style={{ fontSize: 12, fontWeight: 700, color: C.orange, letterSpacing: 0.4, textTransform: "uppercase" }}>{mealPeriodLabel(l.timestamp)}</span>
-                          <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>{fmtTime(l.timestamp)}</span>
+                  <div onClick={() => !virtualized && setExpandedMealId(isExpanded ? null : l.id)}
+                    className={"p-3.5" + (l.id === justAddedId ? " anim-row-flash anim-row-slide-in" : "")}
+                    style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)", boxSizing: "border-box", height: virtualized ? "100%" : undefined, cursor: virtualized ? "default" : "pointer" }}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3 min-w-0">
+                        {hasThumb ? (
+                          <img src={l.photo_thumb} alt="" style={{ width: 42, height: 42, borderRadius: 12, objectFit: "cover", flexShrink: 0 }} />
+                        ) : (
+                          <div style={{ width: 38, height: 38, borderRadius: "50%", background: C.orangeTint, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Utensils size={15} color={C.orange} /></div>
+                        )}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="ft-body" style={{ fontSize: 12, fontWeight: 700, color: C.orange, letterSpacing: 0.4, textTransform: "uppercase" }}>{mealPeriodLabel(l.timestamp)}</span>
+                            <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>{fmtTime(l.timestamp)}</span>
+                          </div>
+                          <div className="ft-body" style={{ fontSize: 15, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{itemsLine}</div>
+                          <div className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>{Math.round(l.calories)} kcal | {Math.round(l.protein_g)}g protein</div>
                         </div>
-                        <div className="ft-body" style={{ fontSize: 15, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{itemsLine}</div>
-                        <div className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>{Math.round(l.calories)} kcal | {Math.round(l.protein_g)}g protein</div>
+                      </div>
+                      <div className="flex items-center gap-0.5 flex-shrink-0">
+                        <button onClick={(e) => { e.stopPropagation(); toggleFavorite(l); }} className="p-2" title="Favorite">
+                          <Star size={14} color={C.tan} fill={favorites.some((f) => (f.food_name || "").trim().toLowerCase() === (l.food_name || "").trim().toLowerCase()) ? C.tan : "none"} />
+                        </button>
+                        {!virtualized && <ChevronDown size={15} color={C.inkSoft} className="meal-chevron" style={{ transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)" }} />}
                       </div>
                     </div>
-                    <div className="flex items-center gap-0.5 flex-shrink-0">
-                      <button onClick={() => toggleFavorite(l)} className="p-2" title="Favorite">
-                        <Star size={14} color={C.tan} fill={favorites.some((f) => (f.food_name || "").trim().toLowerCase() === (l.food_name || "").trim().toLowerCase()) ? C.tan : "none"} />
-                      </button>
-                    </div>
+
+                    {!virtualized && (
+                      <div className="meal-card-expand-wrap" style={{ gridTemplateRows: isExpanded ? "1fr" : "0fr" }}>
+                        <div style={{ minHeight: 0, overflow: "hidden" }}>
+                          <div className={isExpanded ? "anim-meal-detail-in" : ""} style={{ paddingTop: 12, marginTop: 12, borderTop: `1px solid ${C.line}` }} onClick={(e) => e.stopPropagation()}>
+                            {l.estimated_portion && (
+                              <div className="ft-body mb-2" style={{ fontSize: 12, color: C.inkSoft }}>{l.estimated_portion}</div>
+                            )}
+                            <div className="flex gap-2 mb-2.5">
+                              {[["Protein", l.protein_g, C.green, C.greenTint], ["Carbs", l.carbs_g, C.tan, C.tanTint], ["Fat", l.fat_g, C.pink, C.pinkTint], ["Fiber", l.fiber_g, C.purple, C.purpleTint]].map(([label, val, color, bg]) => (
+                                <div key={label} className="flex-1 flex flex-col items-center py-2 rounded-xl" style={{ background: bg }}>
+                                  <span className="ft-mono" style={{ fontSize: 14, fontWeight: 700, color }}>{Math.round(num(val))}g</span>
+                                  <span className="ft-body" style={{ fontSize: 10, color: C.inkSoft }}>{label}</span>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {isExpanded && mealTags(l).map((t, i) => <TagChip key={t.label} label={t.label} color={t.color} bg={t.bg} index={i} />)}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </SwipeRow>
               );};
               // Hundreds of entries render efficiently via windowing; short lists use
               // the normal flow layout so they don't get boxed into a fixed height.
               if (visibleMeals.length > VIRTUALIZE_THRESHOLD) {
-                return <VirtualList items={visibleMeals} itemHeight={78} gap={10} height={480} renderItem={renderMeal} />;
+                return <VirtualList items={visibleMeals} itemHeight={78} gap={10} height={480} renderItem={(l) => renderMeal(l, true)} />;
               }
-              return <div className="flex flex-col gap-2.5">{visibleMeals.map((l) => <div key={l.id}>{renderMeal(l)}</div>)}</div>;
+              return <div className="flex flex-col gap-2.5">{visibleMeals.map((l) => <div key={l.id}>{renderMeal(l, false)}</div>)}</div>;
             })() : (() => {
               const visibleExercise = logsDateFilter ? exerciseLogs.filter((e) => e.date === logsDateFilter) : exerciseLogs;
               if (visibleExercise.length === 0) {
@@ -3394,7 +3687,9 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
 
         {tab === "charts" && (
           <div>
-            <WeeklyConsistencyRow days={weeklyConsistency} />
+            <RevealOnScroll>
+              <WeeklyConsistencyRow days={weeklyConsistency} lastWeekGoodCount={lastWeekGoodCount} />
+            </RevealOnScroll>
 
             {(weeklyDeltaStats.proteinChangePct != null || weeklyDeltaStats.calorieChangePct != null) && (
               <div className="flex items-center gap-3 p-3 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)", flexWrap: "wrap" }}>
@@ -3435,7 +3730,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
 
             {chartsSubTab === "nutrition" ? (
               <>
-                <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                <RevealOnScroll className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                   <div className="flex items-center gap-1" style={{ background: C.bgBottom, borderRadius: 12, padding: 3, marginBottom: 12 }}>
                     {NUTRITION_CHART_METRICS.map((m) => (
                       <button key={m.key} onClick={() => setNutritionChartMetric(m.key)} className="flex-1 ft-body"
@@ -3464,8 +3759,8 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                       </ResponsiveContainer>
                     );
                   })()}
-                </div>
-                <div className="p-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+                </RevealOnScroll>
+                <RevealOnScroll className="p-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                   <div className="flex items-center justify-between mb-2">
                     <span className="ft-body" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Weight</span>
                     {goals.targetWeight > 0 && <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft }}>Goal: {goals.targetWeight}</span>}
@@ -3501,7 +3796,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                       </div>
                     </>
                   )}
-                </div>
+                </RevealOnScroll>
 
                 <div className="p-4 mt-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
                   <div className="ft-body mb-3" style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>Micronutrients today</div>
@@ -3570,9 +3865,10 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                       <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Weekly AI Review</span>
                     </div>
                     {weeklyReviewLoading ? (
-                      <div className="flex items-center gap-2 py-2">
-                        <Loader2 size={14} className="animate-spin" color={C.blue} />
-                        <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Analyzing this week…</span>
+                      <div className="flex flex-col gap-2 py-1">
+                        <SkeletonBlock width="95%" height={11} />
+                        <SkeletonBlock width="70%" height={11} />
+                        <SkeletonBlock width="60%" height={30} radius={12} style={{ marginTop: 4 }} />
                       </div>
                     ) : weeklyReview && weeklyReview.weekStart === currentWeekStart ? (
                       <>
@@ -3606,9 +3902,10 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                       <span className="ft-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Monthly AI Review</span>
                     </div>
                     {monthlyReviewLoading ? (
-                      <div className="flex items-center gap-2 py-2">
-                        <Loader2 size={14} className="animate-spin" color={C.purple} />
-                        <span className="ft-body" style={{ fontSize: 12.5, color: C.inkSoft }}>Analyzing this month…</span>
+                      <div className="flex flex-col gap-2 py-1">
+                        <SkeletonBlock width="95%" height={11} />
+                        <SkeletonBlock width="70%" height={11} />
+                        <SkeletonBlock width="60%" height={30} radius={12} style={{ marginTop: 4 }} />
                       </div>
                     ) : monthlyReview && monthlyReview.monthStart === currentMonthStart ? (
                       <>
@@ -3658,7 +3955,9 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                 </div>
                 <div className="flex gap-2.5 mb-4">
                   <div className="flex-1 flex items-center gap-2.5 p-3.5" style={{ background: C.card, borderRadius: 16 }}>
-                    <div style={{ width: 34, height: 34, borderRadius: 12, background: C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center" }}><Trophy size={16} color={C.pink} /></div>
+                    <div style={{ width: 34, height: 34, borderRadius: 12, background: C.pinkTint, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Flame size={16} color={C.pink} className={streak > 0 ? "anim-flame-flicker" : ""} />
+                    </div>
                     <div><div className="ft-display" style={{ fontSize: 20, fontWeight: 700, color: C.ink }}>{streak}</div><div className="ft-body" style={{ fontSize: 12, color: C.inkSoft }}>current streak</div></div>
                   </div>
                   <div className="flex-1 flex items-center gap-2.5 p-3.5" style={{ background: C.card, borderRadius: 16 }}>
@@ -3701,6 +4000,7 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
     onSaveSplits={persistSplits}
   />
 )}
+        </div>
 
       </div>
 
@@ -3726,10 +4026,10 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
         bottom: "calc(10px + env(safe-area-inset-bottom, 0px))",
         boxShadow: "0 10px 30px rgba(20,20,20,0.16), 0 2px 8px rgba(20,20,20,0.07)",
       }}>
-        <NavBtn active={tab === "home"} onClick={() => setTab("home")} icon={Home} label="Home" />
-        <NavBtn active={tab === "logs"} onClick={() => setTab("logs")} icon={ClipboardList} label="Logs" />
-        <NavBtn active={tab === "charts"} onClick={() => setTab("charts")} icon={BarChart3} label="Insights" />
-        <NavBtn active={tab === "profile"} onClick={() => setTab("profile")} icon={User} label="Profile" />
+        <NavBtn active={tab === "home"} onClick={() => animateTabChange("home")} icon={Home} label="Home" />
+        <NavBtn active={tab === "logs"} onClick={() => animateTabChange("logs")} icon={ClipboardList} label="Logs" />
+        <NavBtn active={tab === "charts"} onClick={() => animateTabChange("charts")} icon={BarChart3} label="Insights" />
+        <NavBtn active={tab === "profile"} onClick={() => animateTabChange("profile")} icon={User} label="Profile" />
       </div>
 
       {/* Fan-out quick actions — Meal / Exercise, stacked upward (Meal
@@ -3770,13 +4070,14 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
 
       <button
         onClick={() => setFabOpen((o) => !o)}
-        onPointerDown={() => setFabPressed(true)}
+        onPointerDown={(e) => { setFabPressed(true); addRippleEffect(e); }}
         onPointerUp={() => setFabPressed(false)}
         onPointerLeave={() => setFabPressed(false)}
         onPointerCancel={() => setFabPressed(false)}
         className={`absolute flex items-center justify-center fab-pill${!fabOpen && !fabPressed ? " fab-breathe" : ""}`}
         style={{
           right: "calc(12.5% - 14px)",
+          overflow: "hidden",
           transform: fabOpen
             ? "rotate(45deg)"
             : fabPressed
@@ -4092,6 +4393,11 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   // for typed text — so "2 rotis, one bowl dal, 100g paneer" spoken aloud is
   // understood and logged as one meal without manual typing or splitting.
   const [listening, setListening] = useState(false);
+  // Briefly true right after a transcript is successfully captured — the mic
+  // button contracts into a checkmark for a beat before AI analysis kicks
+  // off automatically, so "finished listening" reads as a confirmed step
+  // rather than the UI just jumping straight into a loading state.
+  const [voiceJustFinished, setVoiceJustFinished] = useState(false);
   const recognitionRef = useRef(null);
   const isNative = typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
   const speechSupported = isNative || (typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition));
@@ -4160,7 +4466,11 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       setListening(false);
       listener.remove();
       const transcript = (finalMatch || "").trim();
-      if (transcript.length >= 2) { setDescription(transcript); analyze(transcript); }
+      if (transcript.length >= 2) {
+        setDescription(transcript);
+        setVoiceJustFinished(true);
+        setTimeout(() => { setVoiceJustFinished(false); analyze(transcript); }, 500);
+      }
       else setError("Didn't catch any words — try again, speak right after tapping, or type instead.");
     } catch (e) {
       setListening(false);
@@ -4203,7 +4513,10 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     recognition.onend = () => {
       setListening(false);
       const transcript = finalTranscript.trim();
-      if (transcript.length >= 2) analyze(transcript);
+      if (transcript.length >= 2) {
+        setVoiceJustFinished(true);
+        setTimeout(() => { setVoiceJustFinished(false); analyze(transcript); }, 500);
+      }
     };
     recognitionRef.current = recognition;
     setListening(true);
@@ -4417,15 +4730,52 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
             </div>
           ) : mode === "text" ? (
             <div className="relative mb-3">
+              <style>{`
+                @keyframes voiceRingPulse { 0% { transform: scale(1); opacity: 0.55; } 100% { transform: scale(2.1); opacity: 0; } }
+                .voice-ring { animation: voiceRingPulse 1.6s ease-out infinite; }
+                .voice-ring-2 { animation-delay: .8s; }
+                @keyframes voiceWaveBounce { 0%, 100% { height: 4px; } 50% { height: 15px; } }
+                .voice-wave-bar { animation: voiceWaveBounce .9s ease-in-out infinite; }
+                @keyframes wordPopIn { 0% { opacity: 0; transform: translateY(4px) scale(0.9); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+                .anim-word-in { display: inline-block; animation: wordPopIn .22s ease both; }
+              `}</style>
               <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. 2 rotis, one bowl dal, 100g paneer"
                 className="w-full p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 14, minHeight: 90, resize: "none", outline: "none", paddingRight: 46 }} />
               {speechSupported && (
-                <button onClick={toggleVoiceInput} type="button" className="absolute flex items-center justify-center" title={listening ? "Stop listening" : "Speak your meal"}
-                  style={{ top: 10, right: 10, width: 30, height: 30, borderRadius: "50%", background: listening ? C.pink : C.orangeTint }}>
-                  <Mic size={14} color={listening ? "#fff" : C.orange} className={listening ? "animate-pulse" : ""} />
-                </button>
+                <div className="absolute" style={{ top: 10, right: 10, width: 30, height: 30 }}>
+                  {listening && (
+                    <>
+                      <span className="voice-ring" style={{ position: "absolute", inset: -6, borderRadius: "50%", border: `2px solid ${C.pink}`, pointerEvents: "none" }} />
+                      <span className="voice-ring voice-ring-2" style={{ position: "absolute", inset: -6, borderRadius: "50%", border: `2px solid ${C.pink}`, pointerEvents: "none" }} />
+                    </>
+                  )}
+                  <button onClick={toggleVoiceInput} type="button" className="absolute flex items-center justify-center" title={listening ? "Stop listening" : "Speak your meal"}
+                    style={{
+                      inset: 0, borderRadius: "50%",
+                      background: voiceJustFinished ? C.green : listening ? C.pink : C.orangeTint,
+                      transform: voiceJustFinished ? "scale(0.88)" : "scale(1)",
+                      transition: "background .25s ease, transform .3s cubic-bezier(.34,1.56,.64,1)",
+                    }}>
+                    {voiceJustFinished ? <Check size={14} color="#fff" strokeWidth={3} className="anim-check-pop" /> : <Mic size={14} color={listening ? "#fff" : C.orange} />}
+                  </button>
+                </div>
               )}
-              {listening && <div className="ft-body mt-1.5" style={{ fontSize: 12, color: C.pink }}>Listening… speak naturally, e.g. "2 rotis, one bowl dal, and 100 grams paneer"</div>}
+              {listening && (
+                <div className="flex items-end gap-1" style={{ position: "absolute", top: 46, right: 12, height: 16 }}>
+                  {[0.7, 0.95, 0.8, 1.05, 0.75].map((dur, i) => (
+                    <span key={i} className="voice-wave-bar" style={{ width: 3, borderRadius: 2, background: C.pink, animationDuration: `${dur}s`, animationDelay: `${i * 0.09}s` }} />
+                  ))}
+                </div>
+              )}
+              {listening && (
+                <div className="ft-body mt-1.5" style={{ fontSize: 12.5, color: C.ink, minHeight: 18, lineHeight: 1.4 }}>
+                  {description.trim() ? (
+                    description.trim().split(/\s+/).map((w, i) => <span key={i} className="anim-word-in" style={{ marginRight: 4 }}>{w}</span>)
+                  ) : (
+                    <span style={{ color: C.pink }}>Listening… speak naturally, e.g. "2 rotis, one bowl dal, and 100 grams paneer"</span>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             <div className="mb-3">
@@ -4475,7 +4825,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
           {error && (<div className="flex items-start gap-2 p-2.5 mb-3 rounded-xl" style={{ background: C.pinkTint }}><AlertCircle size={15} color={C.pink} style={{ flexShrink: 0, marginTop: 1 }} /><span className="ft-body" style={{ fontSize: 12, color: C.pink }}>{error}</span></div>)}
           {mode !== "barcode" && (
             <>
-              <button onClick={() => analyze()} disabled={analyzing || compressing} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 14, fontWeight: 600, opacity: analyzing ? 0.7 : 1 }}>
+              <button onClick={() => analyze()} onPointerDown={addRippleEffect} disabled={analyzing || compressing} className="ripple-btn w-full flex items-center justify-center gap-2 py-3.5 rounded-full ft-body" style={{ background: C.ink, color: C.onInk, fontSize: 14, fontWeight: 600, opacity: analyzing ? 0.7 : 1 }}>
                 {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Utensils size={16} />}{analyzing ? "Analyzing meal…" : "Analyze meal"}
               </button>
               {analyzing && <MealAnalyzingCard imagePreview={mode === "photo" ? imagePreview : null} />}
@@ -4836,12 +5186,25 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
   const [goalsEditing, setGoalsEditing] = useState(false);
   const [goalsSectionOpen, setGoalsSectionOpen] = useState(false);
   const [exerciseSettingsOpen, setExerciseSettingsOpen] = useState(false);
+  // Brief cover-fade used purely for the dark/light toggle below — the
+  // theme swap itself is still instant (colors come from a single C=...
+  // token object used everywhere, not something safe to add per-element
+  // transitions to), but fading a plain overlay in and back out right as it
+  // swaps reads as one smooth crossfade rather than a hard flash.
+  const [themeFlash, setThemeFlash] = useState(false);
   useEffect(() => setLocal(goals), [goals]);
 
   function toggleGoalsEditing() {
     if (goalsEditing) setLocal(goals); // discard any unsaved edits on cancel
     setSaved(false);
     setGoalsEditing((o) => !o);
+  }
+  function toggleTheme() {
+    setThemeFlash(true);
+    setTimeout(() => {
+      setDarkMode(!darkMode);
+      setTimeout(() => setThemeFlash(false), 200);
+    }, 90);
   }
 
   function field(key, label, unit) {
@@ -4859,7 +5222,20 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
   }
 
   return (
-    <div>      
+    <div>
+    <style>{`
+      @keyframes settingsSectionOpen { 0% { opacity: 0; transform: translateY(-6px); } 100% { opacity: 1; transform: translateY(0); } }
+      .anim-section-open { animation: settingsSectionOpen .22s ease both; }
+      @keyframes settingsEditSlideIn { 0% { opacity: 0; transform: translateX(10px); } 100% { opacity: 1; transform: translateX(0); } }
+      .anim-edit-slide-in { animation: settingsEditSlideIn .22s ease both; }
+      @keyframes themeFlashFade { 0% { opacity: 0; } 50% { opacity: 1; } 100% { opacity: 0; } }
+      .anim-theme-flash { animation: themeFlashFade .29s ease both; }
+      @keyframes settingsSavedPop { 0% { opacity: 0; transform: scale(0.7); } 60% { opacity: 1; transform: scale(1.1); } 100% { opacity: 1; transform: scale(1); } }
+      .anim-saved-pop { animation: settingsSavedPop .35s cubic-bezier(.22,.9,.34,1) both; }
+    `}</style>
+    {themeFlash && (
+      <div className="anim-theme-flash" style={{ position: "fixed", inset: 0, background: darkMode ? LIGHT.bgBottom : DARK.bgBottom, zIndex: 200, pointerEvents: "none" }} />
+    )}
     <div
       className="flex items-center justify-between p-4 mb-4"
       style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}
@@ -4872,7 +5248,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
       </span>
 
       <button
-        onClick={() => setDarkMode(!darkMode)}
+        onClick={toggleTheme}
         aria-pressed={darkMode}
         className="relative"
         style={{
@@ -4908,7 +5284,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
         <ChevronDown size={16} color={C.inkSoft} style={{ transform: goalsSectionOpen ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
       </button>
       {goalsSectionOpen && (
-      <div className="p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
+      <div className="anim-section-open p-4 mb-4" style={{ background: C.card, borderRadius: 16, boxShadow: "0 1px 4px rgba(20,20,20,0.05)" }}>
         <div className="flex items-center justify-end mb-1">
           <button onClick={toggleGoalsEditing} className="flex items-center gap-1 ft-body" style={{ fontSize: 12, fontWeight: 600, color: goalsEditing ? C.inkSoft : C.orange }}>
             {goalsEditing ? "Cancel" : <><Pencil size={12} /> Edit goals</>}
@@ -4916,7 +5292,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
         </div>
 
         {!goalsEditing ? (
-          <div className="flex flex-wrap gap-x-4 gap-y-2 mt-3">
+          <div className="anim-section-open flex flex-wrap gap-x-4 gap-y-2 mt-3">
             {[
               { label: "Calories", value: `${goals.calories} kcal` },
               { label: "Protein", value: `${goals.protein}g` },
@@ -4936,7 +5312,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
             ))}
           </div>
         ) : (
-          <div className="mt-3">
+          <div className="anim-edit-slide-in mt-3">
             {field("calories", "Calories", "kcal")}{field("protein", "Protein", "g")}{field("carbs", "Carbohydrates", "g")}{field("fat", "Fat", "g")}{field("fiber", "Fiber", "g")}{field("water", "Water", "ml")}{field("sleep", "Sleep goal", "min")}
             {field("targetWeight", "Goal weight", "kg (0 = off)")}
             <div className="mb-3">
@@ -4957,8 +5333,10 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
                 className="w-full p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 14, outline: "none" }} />
               <div className="ft-body mt-1" style={{ fontSize: 11, color: C.inkSoft }}>Helps the AI recognize dishes and guess portions more accurately.</div>
             </div>
-            <button onClick={async () => { await onSaveGoals(local); haptic("success"); setSaved(true); setGoalsEditing(false); }} className="w-full flex items-center justify-center gap-2 py-3 rounded-full ft-body"
-              style={{ background: C.orange, color: "#fff", fontSize: 14, fontWeight: 600 }}>Save goals</button>
+            <button onClick={async () => { await onSaveGoals(local); haptic("success"); setSaved(true); setTimeout(() => setGoalsEditing(false), 900); }} disabled={saved} className="w-full flex items-center justify-center gap-2 py-3 rounded-full ft-body"
+              style={{ background: saved ? C.green : C.orange, color: "#fff", fontSize: 14, fontWeight: 600, transition: "background .2s ease" }}>
+              {saved ? <><Check size={16} className="anim-saved-pop" /> Saved</> : "Save goals"}
+            </button>
           </div>
         )}
       </div>
@@ -4969,7 +5347,7 @@ function ProfilePanel({ goals, onSaveGoals, weights, onDeleteWeight, darkMode, s
         <ChevronDown size={16} color={C.inkSoft} style={{ transform: exerciseSettingsOpen ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
       </button>
       {exerciseSettingsOpen && (
-        <div className="mt-3">
+        <div className="anim-section-open mt-3">
           <div className="ft-body mb-2 px-1" style={{ fontSize: 12, color: C.inkSoft }}>Workout split</div>
           <WorkoutSplitEditor splits={splits} onSave={onSaveSplits} />
         </div>
