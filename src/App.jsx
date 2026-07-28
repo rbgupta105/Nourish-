@@ -632,11 +632,26 @@ const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
-async function callGemini(contentBlocks) {
-  const model = genAI.getGenerativeModel({
-    model: "gemini-3.6-flash"
-  });
+// Tried in order — if a model's quota/rate limit is hit, the next one in
+// the chain is used instead of surfacing an error to the user. Only quota /
+// rate-limit style failures fall through like this; any other error (bad
+// request, invalid content, etc.) is thrown immediately rather than wasting
+// time retrying it against every model in the chain.
+const GEMINI_MODEL_FALLBACK_CHAIN = [
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-3.1-flash-lite",
+];
 
+function isGeminiQuotaError(err) {
+  const status = err && (err.status || err.code);
+  const msg = ((err && err.message) || "").toLowerCase();
+  return status === 429 || /quota|rate.?limit|resource.?exhausted|too many requests/.test(msg);
+}
+
+async function callGemini(contentBlocks) {
   const parts = contentBlocks.map((block) => {
     if (block.type === "image") {
       return {
@@ -654,16 +669,28 @@ async function callGemini(contentBlocks) {
     }
   });
 
-  const result = await model.generateContent({
-    contents: [
-      {
-        role: "user",
-        parts,
-      },
-    ],
-  });
-
-  return result.response.text();
+  let lastErr;
+  for (let i = 0; i < GEMINI_MODEL_FALLBACK_CHAIN.length; i++) {
+    try {
+      const model = genAI.getGenerativeModel({ model: GEMINI_MODEL_FALLBACK_CHAIN[i] });
+      const result = await model.generateContent({
+        contents: [
+          {
+            role: "user",
+            parts,
+          },
+        ],
+      });
+      return result.response.text();
+    } catch (err) {
+      lastErr = err;
+      const isLastModel = i === GEMINI_MODEL_FALLBACK_CHAIN.length - 1;
+      if (isLastModel || !isGeminiQuotaError(err)) throw err;
+      // This model's quota/rate limit is hit — fall through to the next
+      // model in the chain rather than failing the request.
+    }
+  }
+  throw lastErr;
 }
 function parseJSON(raw) {
   let cleaned = raw.trim().replace(/^```json/i, "").replace(/^```/, "").replace(/```$/, "").trim();
@@ -3508,9 +3535,11 @@ if (!ready) return <div className="flex items-center justify-center" style={{ he
                       recap). Replays automatically each time a fresh recap
                       is generated, since this whole branch remounts then. */}
                   <div className="ft-body mb-3" style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.45 }}>
-                    {dailyCoach.summary.split(/(\s+)/).map((chunk, i) => (
-                      <span key={i} className="coach-word-in" style={{ animationDelay: `${i * 14}ms` }}>{chunk}</span>
-                    ))}
+                    {dailyCoach.summary.split(/(\s+)/).map((chunk, i) =>
+                      /^\s+$/.test(chunk)
+                        ? chunk
+                        : <span key={i} className="coach-word-in" style={{ animationDelay: `${i * 14}ms` }}>{chunk}</span>
+                    )}
                   </div>
                   <div className="flex flex-col gap-2 mb-2">
                     {dailyCoach.suggestions.map((s, i) => {
@@ -4323,6 +4352,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       items: [],
     });
     setLastCalculatedPortion(`${grams}g`);
+    setLastCalculatedItems([]);
     setAiEstimate(null); // exact label data — not an AI guess, so correction-learning doesn't apply here
     setShowFullDetails(true);
   }
@@ -4388,6 +4418,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
         items,
       });
       setLastCalculatedPortion(estimatedPortion);
+      setLastCalculatedItems(items);
       setAiEstimate({ portion: estimatedPortion, calories: num(parsed.calories) });
       setQuickFeedbackGiven(null);
       if (items.length > 0) setShowItemBreakdown(true);
@@ -4398,6 +4429,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
       setError((e && e.message ? e.message : "Couldn't analyze that meal") + " — enter it manually below.");
       setPending({ ...EMPTY_MEAL, food_name: mode === "text" ? descriptionToUse : "Logged meal" });
       setLastCalculatedPortion("");
+      setLastCalculatedItems([]);
       setAiEstimate(null);
       setJustAnalyzed(false);
       setShowFullDetails(true);
@@ -4566,8 +4598,15 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
   // to, so we know when the user has edited it (e.g. "1 cup rice" -> "1/2 cup
   // rice") and the numbers below are now stale.
   const [lastCalculatedPortion, setLastCalculatedPortion] = useState(editingEntry ? (editingEntry.estimated_portion || "") : "");
+  // Snapshot of pending.items right after analyze()/recalculateFromPortion() —
+  // compared against the live items to catch edits to an *individual* item's
+  // portion (e.g. changing "30g" to "40g" in the item breakdown) even when
+  // the top-level estimated_portion field itself hasn't been touched.
+  const [lastCalculatedItems, setLastCalculatedItems] = useState(editingEntry ? (editingEntry.items || []) : []);
   const [recalculating, setRecalculating] = useState(false);
   const portionIsStale = !!pending && pending.estimated_portion !== lastCalculatedPortion;
+  const itemsAreStale = !!pending && JSON.stringify(pending.items || []) !== JSON.stringify(lastCalculatedItems || []);
+  const nutritionIsStale = portionIsStale || itemsAreStale;
   // The AI's original estimate for the current pending meal (portion + calories),
   // captured right after analyze()/recalculateFromPortion() — compared against
   // whatever the user actually saves so repeated corrections can be learned from.
@@ -4608,7 +4647,13 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     if (!pending || !pending.food_name) { setError("Give the meal a name first."); return; }
     setError(null); setRecalculating(true);
     try {
-      const description2 = `${pending.food_name}${pending.estimated_portion ? ` — portion: ${pending.estimated_portion}` : ""}`;
+      // If there are individual items, describe the meal item-by-item using
+      // their (possibly just-edited) portions — otherwise an edit made only
+      // in the item breakdown (not the top-level portion field) would be
+      // silently ignored by the recalculation.
+      const description2 = pending.items && pending.items.length > 0
+        ? pending.items.map((it) => `${it.food_name}${it.estimated_portion ? ` (${it.estimated_portion})` : ""}`).join(", ")
+        : `${pending.food_name}${pending.estimated_portion ? ` — portion: ${pending.estimated_portion}` : ""}`;
       const portionMemoryNote = buildPortionMemoryNote(pending.food_name);
       const promptText = buildMealPrompt({ mode: "text", description: description2, goals, todayTotals, todayLogs, portionMemoryNote });
       const raw = await callGemini([{ type: "text", text: promptText }]);
@@ -4632,6 +4677,7 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
         items: items.length ? items : p.items,
       }));
       setLastCalculatedPortion(parsed.estimated_portion || pending.estimated_portion);
+      setLastCalculatedItems(items.length ? items : pending.items);
       setAiEstimate({ portion: parsed.estimated_portion || pending.estimated_portion, calories: num(parsed.calories) });
       setQuickFeedbackGiven(null);
     } catch (e) {
@@ -4973,9 +5019,9 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
                 </div>
               )}
 
-              {portionIsStale && (
+              {nutritionIsStale && (
                 <div className="flex items-center justify-between gap-2 p-2.5 mb-3 rounded-xl" style={{ background: C.orangeTint }}>
-                  <span className="ft-body" style={{ fontSize: 12, color: C.orangeDeep, lineHeight: 1.35 }}>Portion changed — nutrition below is for the old amount.</span>
+                  <span className="ft-body" style={{ fontSize: 12, color: C.orangeDeep, lineHeight: 1.35 }}>{portionIsStale ? "Portion changed" : "Item portions changed"} — nutrition below is for the old amount.</span>
                   <button onClick={recalculateFromPortion} disabled={recalculating} className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-full ft-body flex-shrink-0"
                     style={{ background: C.ink, color: C.onInk, fontSize: 12, fontWeight: 600, opacity: recalculating ? 0.7 : 1 }}>
                     {recalculating ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}{recalculating ? "Recalculating…" : "Recalculate nutrition"}
