@@ -626,7 +626,7 @@ async function flushSyncQueue(user) {
   }
 }
 
-// ---------- Gemini API ----------
+// ---------- Gemini API ----------//
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
@@ -639,7 +639,7 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 // time retrying it against every model in the chain.
 const GEMINI_MODEL_FALLBACK_CHAIN = [
   "gemini-2.5-pro",
-  "gemini-3.6-flash",
+  "gemini-2.5-flash",
   "gemini-3.5-flash",
   "gemini-3.1-flash-lite",
 ];
@@ -2211,6 +2211,7 @@ function SwipeRow({ children, onEdit, onDuplicate, onDelete, actionWidth = 132 }
   }
 
   function onTouchStart(e) {
+    e.stopPropagation();
     dragStartX.current = e.touches[0].clientX;
     draggingRef.current = false;
     longPressTimer.current = setTimeout(() => {
@@ -2220,13 +2221,14 @@ function SwipeRow({ children, onEdit, onDuplicate, onDelete, actionWidth = 132 }
   function onTouchMove(e) {
     if (dragStartX.current == null) return;
     const dx = e.touches[0].clientX - dragStartX.current;
-    if (Math.abs(dx) > 6) { draggingRef.current = true; clearTimeout(longPressTimer.current); }
+    if (Math.abs(dx) > 6) { draggingRef.current = true; clearTimeout(longPressTimer.current); e.stopPropagation(); }
     const base = open ? -actionWidth : 0;
     setDragX(clamp(base + dx, -actionWidth, 0));
   }
-  function onTouchEnd() {
+  function onTouchEnd(e) {
     clearTimeout(longPressTimer.current);
     dragStartX.current = null;
+    if (draggingRef.current) e.stopPropagation();
     if (dragX < -actionWidth / 2) { openActions(); if (!open) haptic("light"); }
     else closeActions();
   }
@@ -5169,7 +5171,7 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry, splits }) {
     border: "none",
     background: C.card,
     color: C.ink,
-    fontSize: 14,
+    fontSize: 16,
     outline: "none",
     WebkitTextFillColor: C.ink,
   }}
@@ -5186,11 +5188,11 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry, splits }) {
               <div key={i} className="flex items-center gap-2 p-2.5" style={{ background: C.card, borderRadius: 16 }}>
                 <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft, width: 16 }}>{i + 1}</span>
                 <input type="number" inputMode="decimal" value={s.weight} onChange={(e) => updateSet(i, "weight", e.target.value)} placeholder="Weight"
-                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 12, padding: "8px 6px", border: "none", outline: "none", fontSize: 13 }} />
+                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 12, padding: "8px 6px", border: "none", outline: "none", fontSize: 16 }} />
                 <span className="ft-body" style={{ color: C.inkSoft, fontSize: 12 }}>×</span>
                 <input type="number" inputMode="numeric" value={s.reps} onChange={(e) => updateSet(i, "reps", e.target.value)} placeholder="Reps"
-                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 12, padding: "8px 6px", border: "none", outline: "none", fontSize: 13 }} />
-                {sets.length > 1 && <button onClick={() => removeSet(i)}><X size={14} color={C.inkSoft} /></button>}
+                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 12, padding: "8px 6px", border: "none", outline: "none", fontSize: 16 }} />
+                {sets.length > 1 && <button onClick={() => removeSet(i)} className="flex items-center justify-center" style={{ width: 20, height: 20, flexShrink: 0 }}><X size={14} color={C.inkSoft} /></button>}
               </div>
             ))}
           </div>
@@ -5200,9 +5202,9 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry, splits }) {
         <div className="mb-3">
           <div className="flex gap-2 mb-2">
             <input type="number" inputMode="decimal" value={durationMin} onChange={(e) => setDurationMin(e.target.value)} placeholder="Duration (min)"
-              className="flex-1 p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 13, outline: "none" }} />
+              className="flex-1 p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 16, outline: "none" }} />
             <input type="number" inputMode="decimal" value={distanceKm} onChange={(e) => setDistanceKm(e.target.value)} placeholder="Distance (km)"
-              className="flex-1 p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 13, outline: "none" }} />
+              className="flex-1 p-3 rounded-2xl ft-body" style={{ border: "none", background: C.card, color: C.ink, fontSize: 16, outline: "none" }} />
           </div>
           <div className="flex gap-2">
             {["light", "moderate", "vigorous"].map((lvl) => (
