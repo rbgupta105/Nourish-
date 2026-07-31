@@ -626,7 +626,7 @@ async function flushSyncQueue(user) {
   }
 }
 
-// ---------- Gemini API ----------//
+// ---------- Gemini API ----------
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
@@ -639,6 +639,10 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 // time retrying it against every model in the chain.
 const GEMINI_MODEL_FALLBACK_CHAIN = [
   "gemini-2.5-pro",
+<<<<<<< HEAD
+=======
+  "gemini-3.6-flash",
+>>>>>>> 1a009da (Stable)
   "gemini-3.5-flash",
   "gemini-3.1-flash-lite",
 ];
@@ -648,6 +652,19 @@ function isGeminiQuotaError(err) {
   const msg = ((err && err.message) || "").toLowerCase();
   return status === 429 || /quota|rate.?limit|resource.?exhausted|too many requests/.test(msg);
 }
+
+// A 503/UNAVAILABLE "high demand, try again later" response is a different
+// failure mode from a quota error (it's Google's servers being overloaded,
+// not your account being throttled) — but it should fall through the model
+// chain the same way, otherwise the chain never actually gets used for the
+// error users hit most often.
+function isGeminiOverloadedError(err) {
+  const status = err && (err.status || err.code);
+  const msg = ((err && err.message) || "").toLowerCase();
+  return status === 503 || /unavailable|overloaded|high demand|try again later/.test(msg);
+}
+
+function sleep(ms) { return new Promise((res) => setTimeout(res, ms)); }
 
 async function callGemini(contentBlocks) {
   const parts = contentBlocks.map((block) => {
@@ -669,32 +686,72 @@ async function callGemini(contentBlocks) {
 
   let lastErr;
   for (let i = 0; i < GEMINI_MODEL_FALLBACK_CHAIN.length; i++) {
-    try {
-      const model = genAI.getGenerativeModel({ model: GEMINI_MODEL_FALLBACK_CHAIN[i] });
-      const result = await model.generateContent({
-        contents: [
-          {
-            role: "user",
-            parts,
-          },
-        ],
-      });
-      return result.response.text();
-    } catch (err) {
-      lastErr = err;
-      const isLastModel = i === GEMINI_MODEL_FALLBACK_CHAIN.length - 1;
-      if (isLastModel || !isGeminiQuotaError(err)) throw err;
-      // This model's quota/rate limit is hit — fall through to the next
-      // model in the chain rather than failing the request.
+    // A couple of quick retries on the SAME model first — 503s are often a
+    // few-second blip, so it's often faster than jumping models.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const model = genAI.getGenerativeModel({ model: GEMINI_MODEL_FALLBACK_CHAIN[i] });
+        const result = await model.generateContent({
+          contents: [
+            {
+              role: "user",
+              parts,
+            },
+          ],
+        });
+        return result.response.text();
+      } catch (err) {
+        lastErr = err;
+        const retryable = isGeminiQuotaError(err) || isGeminiOverloadedError(err);
+        if (!retryable) throw err;
+        if (attempt === 0) {
+          await sleep(600 * (i + 1)); // brief backoff before retrying this model once
+          continue;
+        }
+        // Exhausted retries on this model — fall through to the next model
+        // in the chain, unless this was the last one.
+        const isLastModel = i === GEMINI_MODEL_FALLBACK_CHAIN.length - 1;
+        if (isLastModel) throw err;
+      }
     }
   }
   throw lastErr;
 }
+// Best-effort repairs for the common ways a model's "JSON" response drifts
+// from strict JSON — unquoted object keys, single-quoted strings, and
+// trailing commas before a closing } or ]. Applied in order, re-attempting
+// JSON.parse after each fix, so we only apply as much surgery as needed.
+function repairJSONLikeText(text) {
+  let out = text;
+  // Trailing commas: {"a":1,} or [1,2,]
+  out = out.replace(/,(\s*[}\]])/g, "$1");
+  // Unquoted keys: {calories: 450, name: "x"} -> {"calories": 450, "name": "x"}
+  // Matches a bare identifier immediately after { or , followed by a colon.
+  out = out.replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)/g, '$1"$2"$3');
+  // Single-quoted string values -> double-quoted (best effort; skips ones
+  // that already contain a double quote to avoid corrupting them further).
+  out = out.replace(/:(\s*)'([^'"]*)'/g, ':$1"$2"');
+  return out;
+}
+
 function parseJSON(raw) {
   let cleaned = raw.trim().replace(/^```json/i, "").replace(/^```/, "").replace(/```$/, "").trim();
   const first = cleaned.indexOf("{"); const last = cleaned.lastIndexOf("}");
   if (first >= 0 && last > first) cleaned = cleaned.slice(first, last + 1);
-  return JSON.parse(cleaned);
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (firstErr) {
+    // Try progressively repairing the text rather than failing immediately —
+    // most real-world breakages are one of a few well-known slips.
+    try {
+      return JSON.parse(repairJSONLikeText(cleaned));
+    } catch (secondErr) {
+      // Give up with the ORIGINAL error, since it points at the actual
+      // problem in the model's raw output rather than our repair attempt.
+      throw firstErr;
+    }
+  }
 }
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -5187,10 +5244,10 @@ function ExerciseForm({ exerciseLogs, onSave, editingEntry, splits }) {
               <div key={i} className="flex items-center gap-2 p-2.5" style={{ background: C.card, borderRadius: 16 }}>
                 <span className="ft-mono" style={{ fontSize: 12, color: C.inkSoft, width: 16 }}>{i + 1}</span>
                 <input type="number" inputMode="decimal" value={s.weight} onChange={(e) => updateSet(i, "weight", e.target.value)} placeholder="Weight"
-                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 12, padding: "8px 6px", border: "none", outline: "none", fontSize: 16 }} />
+                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 12, padding: "8px 6px", border: "none", outline: "none", fontSize: 16, minWidth: 0 }} />
                 <span className="ft-body" style={{ color: C.inkSoft, fontSize: 12 }}>×</span>
                 <input type="number" inputMode="numeric" value={s.reps} onChange={(e) => updateSet(i, "reps", e.target.value)} placeholder="Reps"
-                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 12, padding: "8px 6px", border: "none", outline: "none", fontSize: 16 }} />
+                  className="flex-1 ft-mono text-center" style={{ background: C.bgBottom, color: C.ink, borderRadius: 12, padding: "8px 6px", border: "none", outline: "none", fontSize: 16, minWidth: 0 }} />
                 {sets.length > 1 && <button onClick={() => removeSet(i)} className="flex items-center justify-center" style={{ width: 20, height: 20, flexShrink: 0 }}><X size={14} color={C.inkSoft} /></button>}
               </div>
             ))}
