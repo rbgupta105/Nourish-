@@ -639,10 +639,7 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 // time retrying it against every model in the chain.
 const GEMINI_MODEL_FALLBACK_CHAIN = [
   "gemini-2.5-pro",
-<<<<<<< HEAD
-=======
   "gemini-3.6-flash",
->>>>>>> 1a009da (Stable)
   "gemini-3.5-flash",
   "gemini-3.1-flash-lite",
 ];
