@@ -639,6 +639,7 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 // time retrying it against every model in the chain.
 const GEMINI_MODEL_FALLBACK_CHAIN = [
   "gemini-2.5-pro",
+  "gemini-2.5-flash",
   "gemini-3.6-flash",
   "gemini-3.5-flash",
   "gemini-3.1-flash-lite",
@@ -4701,11 +4702,16 @@ function MealForm({ initialMode, goals, todayTotals, todayLogs, onSave, favorite
     if (!pending || !pending.food_name) { setError("Give the meal a name first."); return; }
     setError(null); setRecalculating(true);
     try {
-      // If there are individual items, describe the meal item-by-item using
-      // their (possibly just-edited) portions — otherwise an edit made only
-      // in the item breakdown (not the top-level portion field) would be
-      // silently ignored by the recalculation.
-      const description2 = pending.items && pending.items.length > 0
+      // If there are multiple individual items, describe the meal item-by-item
+      // using their (possibly just-edited) portions — otherwise an edit made
+      // only in the item breakdown (not the top-level portion field) would be
+      // silently ignored by the recalculation. For a single item, the item
+      // breakdown UI is never shown (see the `items.length > 1` check below),
+      // so the top-level food_name/estimated_portion fields are the only ones
+      // the user can actually edit — use those, or a same-length items array
+      // would silently re-send the old, un-edited per-item portion instead of
+      // whatever the user just typed (e.g. "3 piece" or "+10g whey").
+      const description2 = pending.items && pending.items.length > 1
         ? pending.items.map((it) => `${it.food_name}${it.estimated_portion ? ` (${it.estimated_portion})` : ""}`).join(", ")
         : `${pending.food_name}${pending.estimated_portion ? ` — portion: ${pending.estimated_portion}` : ""}`;
       const portionMemoryNote = buildPortionMemoryNote(pending.food_name);
